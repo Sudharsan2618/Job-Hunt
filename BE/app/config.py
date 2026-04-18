@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     
     # CORS Configuration
-    CORS_ORIGINS: list[str] = Field(default=["http://localhost:3000","https://job-hunt-204519078454.asia-south1.run.app"], description="Allowed CORS origins")
+    CORS_ORIGINS: list[str] = Field(default=["http://localhost:3000","https://job-hunt-kappa-two.vercel.app"], description="Allowed CORS origins")
 
     # LinkedIn Credentials (for company info API)
     LINKEDIN_EMAIL: str = Field(default="", description="LinkedIn login email")
