@@ -10,7 +10,8 @@ from app.config import settings
 app = FastAPI(
     title="Recruitment API",
     description="Job hunting and recruitment automation API",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False
 )
 
 app.add_middleware(
