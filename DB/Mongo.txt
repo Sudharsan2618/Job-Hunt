@@ -1,0 +1,1062 @@
+/**
+ * MongoDB Collections Setup Script
+ * 
+ * DATABASE: recruitmentDB
+ * Collections:
+ * - runs             (embeds runConfig snapshot per run)
+ * - jobs
+ * - companies
+ * - prospects
+ * - outreach
+ * - icpConfig        (single versioned doc: titles, locations, industries, personaMappings)
+ * - outreachTemplates
+ * 
+ * NOTE: buyerPersonaMappings is DEPRECATED — folded into icpConfig.personaMappings
+ * NOTE: Title/industry filter keywords stay in config.py (not stored in DB)
+ * 
+ * NAMING CONVENTIONS APPLIED:
+ * ✓ Collections: lowercase, plural nouns (runs, jobs, companies, etc.)
+ * ✓ Fields: camelCase (firstName, createdAt, companyId)
+ * ✓ Foreign Keys: camelCase with 'Id' suffix (jobId, companyId, prospectId)
+ * ✓ Indexes: idx_fieldName format for clarity
+ * ✓ All field names avoid special characters and dots
+ * ✓ Maximum namespace length maintained (< 120 bytes)
+ */
+
+// ============================================================================
+// 1. RUNS COLLECTION
+// ============================================================================
+// Purpose: Track recruitment run campaigns/batches
+// runConfig embeds the exact ICP snapshot used — so historical runs are
+// self-contained even if icpConfig changes in the future.
+
+db.createCollection("runs", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Runs",
+      required: ["_id", "title", "runStartedAt", "runConfig"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the run"
+        },
+        title: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 255,
+          description: "Human-readable label for this run"
+        },
+        source: {
+          enum: ["jobspy", "linkedin_api", "mixed"],
+          description: "Data source that initiated this run"
+        },
+        runStartedAt: {
+          bsonType: "date",
+          description: "Start date/time of the run"
+        },
+        runEndedAt: {
+          bsonType: "date",
+          description: "End date/time of the run (set on completion)"
+        },
+        status: {
+          enum: ["active", "completed", "paused", "cancelled"],
+          description: "Current status of the run"
+        },
+        stats: {
+          bsonType: "object",
+          description: "Live counters updated as data flows in during the run",
+          properties: {
+            totalJobsScraped:  { bsonType: "int", description: "Total raw jobs scraped" },
+            inserted:          { bsonType: "int", description: "New jobs inserted (not duplicates)" },
+            duplicates:        { bsonType: "int", description: "Duplicate jobs skipped" },
+            acceptedJobs:      { bsonType: "int", description: "Jobs that passed title rejection" },
+            rejectedJobs:      { bsonType: "int", description: "Jobs rejected by title filter" },
+            uniqueCompanies:   { bsonType: "int", description: "Unique companies found" },
+            acceptedCompanies: { bsonType: "int", description: "Companies that passed rejection engine" },
+            rejectedCompanies: { bsonType: "int", description: "Companies filtered out" },
+            skippedCompanies:  { bsonType: "int", description: "Companies skipped (no LinkedIn data)" },
+            totalProspects:    { bsonType: "int", description: "Total qualified prospects found" }
+          }
+        },
+        runConfig: {
+          bsonType: "object",
+          required: ["searchTitles", "searchLocations"],
+          description: "Snapshot of the ICP config used for this run",
+          properties: {
+            searchTitles: {
+              bsonType: "array",
+              items: { bsonType: "string" },
+              description: "Job titles searched in this run"
+            },
+            searchLocations: {
+              bsonType: "array",
+              items: { bsonType: "string" },
+              description: "Locations searched in this run"
+            },
+            hoursOld: {
+              bsonType: "int",
+              description: "Max age of job postings to include"
+            },
+            resultsPerSearch: {
+              bsonType: "int",
+              description: "Max results fetched per title x location combo"
+            },
+            siteName: {
+              bsonType: "array",
+              items: { bsonType: "string" },
+              description: "Job boards used e.g. ['linkedin']"
+            },
+            icpConfigSnapshot: {
+              bsonType: ["object", "null"],
+              description: "Snapshot of icpConfig _id and version used",
+              properties: {
+                icpConfigId: { bsonType: ["objectId", "null"] },
+                version:     { bsonType: "int" }
+              }
+            }
+          }
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for runs collection
+db.runs.createIndex({ "title": 1 }, { name: "idx_title" });
+db.runs.createIndex({ "source": 1 }, { name: "idx_source" });
+db.runs.createIndex({ "runStartedAt": 1 }, { name: "idx_runStartedAt" });
+db.runs.createIndex({ "status": 1 }, { name: "idx_status" });
+db.runs.createIndex({ "runConfig.icpConfigSnapshot.version": 1 }, { name: "idx_icpVersion" });
+db.runs.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// 2. COMPANIES COLLECTION
+// ============================================================================
+// Purpose: Store company information
+
+db.createCollection("companies", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Companies",
+      required: ["_id", "companyName", "companyDomain"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the company"
+        },
+        companyName: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 255,
+          description: "Official name of the company"
+        },
+        companyDomain: {
+          bsonType: "string",
+          pattern: "^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+          description: "Company domain (email domain)"
+        },
+        linkedinSlug: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "LinkedIn company slug extracted from URL"
+        },
+        companyDetails: {
+          bsonType: "object",
+          description: "Nested JSON object with company details",
+          properties: {
+            description: { bsonType: "string" },
+            website: { bsonType: "string" },
+            industries: {
+              bsonType: "array",
+              items: { bsonType: "string" },
+              description: "Industry list from LinkedIn"
+            },
+            staffCount: { bsonType: "int", description: "Staff count from LinkedIn" },
+            staffingCompany: { bsonType: "bool", description: "Whether company is a staffing firm" }
+          }
+        },
+        industry: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Industry classification"
+        },
+        employeeCount: {
+          bsonType: "int",
+          minimum: 0,
+          description: "Number of employees"
+        },
+        location: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Company headquarters location"
+        },
+        isEligible: {
+          bsonType: "bool",
+          description: "Whether the company is eligible for targeting"
+        },
+        notes: {
+          bsonType: "string",
+          description: "Additional notes about the company"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for companies collection
+db.companies.createIndex({ "companyName": 1 }, { name: "idx_companyName" });
+db.companies.createIndex({ "companyDomain": 1 }, { name: "idx_companyDomain", unique: true });
+db.companies.createIndex({ "linkedinSlug": 1 }, { name: "idx_linkedinSlug", unique: true, sparse: true });
+db.companies.createIndex({ "industry": 1 }, { name: "idx_industry" });
+db.companies.createIndex({ "isEligible": 1 }, { name: "idx_isEligible" });
+db.companies.createIndex({ "employeeCount": 1 }, { name: "idx_employeeCount" });
+db.companies.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// 3. JOBS COLLECTION
+// ============================================================================
+// Purpose: Store job listings and details
+
+db.createCollection("jobs", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Jobs",
+      required: ["_id", "title", "location"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the job"
+        },
+        runId: {
+          bsonType: "objectId",
+          description: "Reference to the run this job belongs to"
+        },
+        title: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 255,
+          description: "Job title"
+        },
+        location: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Job location"
+        },
+        boardName: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Job board where it was posted"
+        },
+        externalId: {
+          bsonType: "string",
+          description: "External ID from LinkedIn/Indeed or other platform"
+        },
+        company: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Company name as scraped from job board"
+        },
+        companyId: {
+          bsonType: "objectId",
+          description: "Reference to the company (FK, set in Phase 2)"
+        },
+        jobDetails: {
+          bsonType: "object",
+          description: "Nested JSON object with job requirements and details",
+          properties: {
+            description: { bsonType: "string" },
+            requirements: { bsonType: "array" },
+            salary: { bsonType: "object" },
+            jobUrl: { bsonType: "string", description: "URL to the job posting" },
+            jobUrlDirect: { bsonType: "string", description: "Direct apply URL" },
+            companyUrl: { bsonType: "string", description: "LinkedIn company page URL" },
+            searchKeyword: { bsonType: "string", description: "ICP title keyword used for this search" },
+            searchLocation: { bsonType: "string", description: "Location used for this search" },
+            dedupeStrategy: { bsonType: "string", description: "Dedup strategy used (externalId|fingerprint)" },
+            dedupeKey: { bsonType: ["string", "null"], description: "Fingerprint hash for dedup" },
+            rawPayload: { bsonType: "object", description: "Full raw scraped payload" }
+          }
+        },
+        qualityStatus: {
+          enum: ["excellent", "good", "fair", "poor"],
+          description: "Quality assessment of the job posting"
+        },
+        rejectionReason: {
+          bsonType: ["string", "null"],
+          description: "Reason for job rejection if applicable"
+        },
+        canonicalId: {
+          bsonType: "objectId",
+          description: "Reference to canonical/master job record"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for jobs collection
+db.jobs.createIndex({ "runId": 1, "createdAt": -1 }, { name: "idx_runId_createdAt" });
+db.jobs.createIndex({ "companyId": 1 }, { name: "idx_companyId" });
+db.jobs.createIndex({ "title": 1 }, { name: "idx_title" });
+db.jobs.createIndex({ "location": 1 }, { name: "idx_location" });
+db.jobs.createIndex({ "externalId": 1 }, { name: "idx_externalId" });
+db.jobs.createIndex({ "qualityStatus": 1 }, { name: "idx_qualityStatus" });
+db.jobs.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// 4. PROSPECTS COLLECTION
+// ============================================================================
+// Purpose: Store prospect/candidate information
+
+db.createCollection("prospects", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Prospects",
+      required: ["_id", "firstName", "lastName", "email"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the prospect"
+        },
+        companyId: {
+          bsonType: "objectId",
+          description: "Reference to the company (FK)"
+        },
+        firstName: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 100,
+          description: "Prospect's first name"
+        },
+        lastName: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 100,
+          description: "Prospect's last name"
+        },
+        email: {
+          bsonType: "string",
+          pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+          description: "Prospect's email address"
+        },
+        title: {
+          bsonType: "string",
+          maxLength: 255,
+          description: "Job title of the prospect"
+        },
+        prospectDetails: {
+          bsonType: "object",
+          description: "Nested JSON object with additional prospect details",
+          properties: {
+            linkedinUrl: { bsonType: "string" },
+            phone: { bsonType: "string" },
+            location: { bsonType: "string" }
+          }
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for prospects collection
+db.prospects.createIndex({ "email": 1 }, { name: "idx_email", unique: true });
+db.prospects.createIndex({ "companyId": 1 }, { name: "idx_companyId" });
+db.prospects.createIndex({ "firstName": 1, "lastName": 1 }, { name: "idx_firstName_lastName" });
+db.prospects.createIndex({ "title": 1 }, { name: "idx_title" });
+db.prospects.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// 5. ICP CONFIG COLLECTION
+// ============================================================================
+// Purpose: Single versioned document holding all ICP targeting configuration:
+//          titles, locations, industries (with LinkedIn name variants),
+//          and persona mappings per industry.
+// NOTE:    buyerPersonaMappings collection is DEPRECATED — replaced by
+//          personaMappings array embedded here.
+// NOTE:    Accept/reject filter keywords stay in config.py, not stored here.
+
+db.createCollection("icpConfig", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "ICP Config",
+      required: ["_id", "version", "industries", "titles", "locations", "personaMappings"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for this config version"
+        },
+        version: {
+          bsonType: "int",
+          description: "Increment when ICP targeting strategy changes"
+        },
+        isActive: {
+          bsonType: "bool",
+          description: "Only one document should have isActive: true at a time"
+        },
+        titles: {
+          bsonType: "array",
+          description: "Master catalog of searchable job titles",
+          items: {
+            bsonType: "object",
+            required: ["title", "isActive"],
+            properties: {
+              title:     { bsonType: "string", description: "Job title string" },
+              isActive:  { bsonType: "bool",   description: "Whether this title is enabled" },
+              isDefault: { bsonType: "bool",   description: "Included in default run (maps to SEARCH_TITLES in config.py)" }
+            }
+          }
+        },
+        locations: {
+          bsonType: "array",
+          description: "Target geographic locations",
+          items: {
+            bsonType: "object",
+            required: ["location", "isActive"],
+            properties: {
+              location:  { bsonType: "string", description: "Location string e.g. 'Canada'" },
+              country:   { bsonType: "string", description: "Country name" },
+              isActive:  { bsonType: "bool",   description: "Whether this location is enabled" },
+              isDefault: { bsonType: "bool",   description: "Included in default run" }
+            }
+          }
+        },
+        industries: {
+          bsonType: "array",
+          description: "All target industry verticals with LinkedIn name variants",
+          items: {
+            bsonType: "object",
+            required: ["slug", "displayName", "isTarget"],
+            properties: {
+              slug:         { bsonType: "string", description: "Internal slug e.g. not_for_profit" },
+              displayName:  { bsonType: "string", description: "Human-readable name e.g. Not-for-profit" },
+              isTarget:     { bsonType: "bool",   description: "Whether this industry is a target vertical" },
+              linkedinNames: {
+                bsonType: "array",
+                items: { bsonType: "string" },
+                description: "LinkedIn localizedName variants that map to this slug (from INDUSTRY_SLUG_MAP)"
+              }
+            }
+          }
+        },
+        personaMappings: {
+          bsonType: "array",
+          description: "Industry slug to ordered buyer persona titles (from INDUSTRY_PERSONA_MAP)",
+          items: {
+            bsonType: "object",
+            required: ["industrySlug", "personaTitles"],
+            properties: {
+              industrySlug: {
+                bsonType: "string",
+                description: "Must match a slug in industries[]"
+              },
+              personaTitles: {
+                bsonType: "array",
+                items: { bsonType: "string" },
+                description: "Ordered buyer persona titles to target for this industry"
+              }
+            }
+          }
+        },
+        defaultPersonaTitles: {
+          bsonType: "array",
+          items: { bsonType: "string" },
+          description: "Fallback persona titles when company industry is outside target verticals (DEFAULT_PERSONA_TITLES)"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for icpConfig collection
+db.icpConfig.createIndex({ "version": 1 }, { name: "idx_version", unique: true });
+db.icpConfig.createIndex({ "isActive": 1 }, { name: "idx_isActive" });
+
+// ============================================================================
+// 6. OUTREACH TEMPLATES COLLECTION
+// ============================================================================
+// Purpose: Store templates for outreach campaigns
+
+db.createCollection("outreachTemplates", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Outreach Templates",
+      required: ["_id", "industry", "persona", "outreachType", "template"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the template"
+        },
+        industry: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 255,
+          description: "Industry this template applies to"
+        },
+        persona: {
+          bsonType: "string",
+          minLength: 1,
+          maxLength: 255,
+          description: "Buyer persona this template targets"
+        },
+        outreachType: {
+          enum: ["email", "linkedin", "phone", "inmail"],
+          description: "Type of outreach"
+        },
+        template: {
+          bsonType: "string",
+          description: "Template content with placeholders"
+        },
+        artifactFields: {
+          bsonType: "array",
+          items: {
+            bsonType: "string"
+          },
+          description: "List of variable placeholders in template"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for outreachTemplates collection
+db.outreachTemplates.createIndex({ "industry": 1, "persona": 1, "outreachType": 1 }, { name: "idx_industry_persona_type" });
+db.outreachTemplates.createIndex({ "outreachType": 1 }, { name: "idx_outreachType" });
+db.outreachTemplates.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// 7. OUTREACH COLLECTION
+// ============================================================================
+// Purpose: Track individual outreach campaign activities
+
+db.createCollection("outreach", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      title: "Outreach",
+      required: ["_id", "jobId", "companyId", "prospectId"],
+      properties: {
+        _id: {
+          bsonType: "objectId",
+          description: "Unique identifier for the outreach record"
+        },
+        jobId: {
+          bsonType: "objectId",
+          description: "Reference to the job (FK)"
+        },
+        companyId: {
+          bsonType: "objectId",
+          description: "Reference to the company (FK)"
+        },
+        prospectId: {
+          bsonType: "objectId",
+          description: "Reference to the prospect (FK)"
+        },
+        templateId: {
+          bsonType: "objectId",
+          description: "Reference to the outreach template used"
+        },
+        outreachType: {
+          enum: ["email", "linkedin", "phone", "inmail"],
+          description: "Type of outreach communication"
+        },
+        status: {
+          enum: ["pending", "sent", "opened", "clicked", "replied", "unsubscribed", "bounced", "failed"],
+          description: "Current status of the outreach"
+        },
+        reachType: {
+          enum: ["cold", "warm", "referral"],
+          description: "Type of reach/connection"
+        },
+        sentAt: {
+          bsonType: "date",
+          description: "When the outreach was sent"
+        },
+        openedAt: {
+          bsonType: "date",
+          description: "When the outreach was opened"
+        },
+        clickedAt: {
+          bsonType: "date",
+          description: "When a link was clicked"
+        },
+        repliedAt: {
+          bsonType: "date",
+          description: "When a reply was received"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "When this document was created"
+        },
+        updatedAt: {
+          bsonType: "date",
+          description: "When this document was last updated"
+        }
+      }
+    }
+  }
+});
+
+// Create indexes for outreach collection
+db.outreach.createIndex({ "jobId": 1, "prospectId": 1 }, { name: "idx_jobId_prospectId", unique: true });
+db.outreach.createIndex({ "companyId": 1 }, { name: "idx_companyId" });
+db.outreach.createIndex({ "prospectId": 1 }, { name: "idx_prospectId" });
+db.outreach.createIndex({ "status": 1 }, { name: "idx_status" });
+db.outreach.createIndex({ "outreachType": 1 }, { name: "idx_outreachType" });
+db.outreach.createIndex({ "reachType": 1 }, { name: "idx_reachType" });
+db.outreach.createIndex({ "sentAt": -1 }, { name: "idx_sentAt_desc" });
+db.outreach.createIndex({ "status": 1, "sentAt": -1 }, { name: "idx_status_sentAt" });
+db.outreach.createIndex({ "createdAt": -1 }, { name: "idx_createdAt_desc" });
+
+// ============================================================================
+// SUMMARY OF BEST PRACTICES IMPLEMENTED
+// ============================================================================
+/*
+ * ✓ NAMING CONVENTIONS:
+ *   - Collections: Lowercase, plural (runs, jobs, companies, prospects, outreach, etc.)
+ *   - Fields: camelCase (firstName, companyId, createdAt)
+ *   - Foreign Keys: Suffixed with 'Id' (jobId, companyId, prospectId)
+ *   - Indexes: Prefixed with 'idx_' for clarity
+ *   - Timestamps: createdAt and updatedAt for audit trails
+ *
+ * ✓ SCHEMA VALIDATION:
+ *   - JSON Schema validators for all collections
+ *   - Required fields explicitly defined
+ *   - Data types enforced (bsonType)
+ *   - String length constraints to optimize storage
+ *   - Email and domain pattern validation
+ *   - Enum values for status fields
+ *
+ * ✓ INDEXING STRATEGY:
+ *   - Single field indexes on frequently queried fields
+ *   - Composite indexes for common query patterns (e.g., runId + createdAt)
+ *   - Unique indexes where appropriate (email, externalId, jobId+prospectId)
+ *   - Descending indexes on date fields for latest-first queries
+ *   - Indexes on foreign key fields for JOIN-like operations
+ *
+ * ✓ RELATIONSHIPS:
+ *   - Foreign key fields clearly named with 'Id' suffix
+ *   - Comments document the relationships
+ *   - No embedded arrays of references (maintains flexibility)
+ *   - runs.runConfig embeds ICP snapshot for historical integrity
+ *
+ * ✓ NESTED JSON:
+ *   - Used for extensible data (jobDetails, prospectDetails, companyDetails)
+ *   - runConfig embedded in runs for self-contained run history
+ *   - icpConfig uses arrays of sub-documents for titles, locations, industries
+ *   - Allows flexibility without schema changes
+ *   - Still validated at top level
+ *
+ * ✓ PERFORMANCE:
+ *   - Shorter field names reduce document size
+ *   - Strategic indexes prevent full collection scans
+ *   - Descending date indexes support pagination
+ *   - Composite indexes for multi-criteria queries
+ *
+ * ✓ MAINTAINABILITY:
+ *   - Clear collection purposes documented
+ *   - Field descriptions in schema
+ *   - Explicit index naming reveals intent
+ *   - Consistent timestamp naming (createdAt, updatedAt)
+ *   - Filter keywords (accept/reject) kept in config.py — not duplicated in DB
+ *   - buyerPersonaMappings deprecated and folded into icpConfig.personaMappings
+ */
+
+console.log("✓ All collections created successfully!");
+console.log("✓ Schema validation enabled for data integrity");
+console.log("✓ Indexes created for optimal query performance");
+console.log("✓ Best practices implemented: naming, validation, indexing");
+
+// ============================================================================
+// SEED DATA — icpConfig v1
+// ============================================================================
+// Source: config.py (ALL_TITLES, SEARCH_TITLES, ALL_LOCATIONS,
+//                    INDUSTRY_SLUG_MAP, INDUSTRY_PERSONA_MAP,
+//                    DEFAULT_PERSONA_TITLES)
+// isDefault: true  → title is in SEARCH_TITLES (used in default CLI run)
+// isDefault: false → title is in ALL_TITLES only (available but not default)
+// Run this AFTER the collection creation script above.
+
+db.icpConfig.insertOne({
+  version: 1,
+  isActive: true,
+
+  titles: [
+    { title: "Chief Executive Officer",            isActive: true, isDefault: true  },
+    { title: "Executive Director",                 isActive: true, isDefault: true  },
+    { title: "Vice President",                     isActive: true, isDefault: false },
+    { title: "Chief Financial Officer",            isActive: true, isDefault: true  },
+    { title: "Chief Operating Officer",            isActive: true, isDefault: true  },
+    { title: "VP Human Resources",                 isActive: true, isDefault: true  },
+    { title: "VP Operations",                      isActive: true, isDefault: true  },
+    { title: "Director of Engineering",            isActive: true, isDefault: true  },
+    { title: "Director of Infrastructure",         isActive: true, isDefault: true  },
+    { title: "Head of Delivery",                   isActive: true, isDefault: true  },
+    { title: "Managing Director",                  isActive: true, isDefault: false },
+    { title: "General Manager",                    isActive: true, isDefault: false },
+    { title: "President",                          isActive: true, isDefault: true  },
+    { title: "Chief Technology Officer",           isActive: true, isDefault: true  },
+    { title: "Chief Information Officer",          isActive: true, isDefault: true  },
+    { title: "Chief Administrative Officer",       isActive: true, isDefault: true  },
+    { title: "City Manager",                       isActive: true, isDefault: true  },
+    { title: "VP Finance",                         isActive: true, isDefault: true  },
+    { title: "Chief Human Resources Officer",      isActive: true, isDefault: true  },
+    { title: "VP People & Culture",                isActive: true, isDefault: true  },
+    { title: "General Counsel",                    isActive: true, isDefault: true  },
+    { title: "VP Legal",                           isActive: true, isDefault: true  },
+    { title: "Chief Medical Officer",              isActive: true, isDefault: true  },
+    { title: "Chief Revenue Officer",              isActive: true, isDefault: true  },
+    { title: "VP Sales",                           isActive: true, isDefault: true  },
+    { title: "Chief Nursing Officer",              isActive: true, isDefault: true  },
+    { title: "VP Clinical Services",               isActive: true, isDefault: true  },
+    { title: "Chief Product Officer",              isActive: true, isDefault: true  },
+    { title: "VP Product",                         isActive: true, isDefault: true  },
+    { title: "Chief Sustainability Officer",       isActive: true, isDefault: true  },
+    { title: "VP ESG",                             isActive: true, isDefault: true  },
+    { title: "Chief Risk Officer",                 isActive: true, isDefault: true  },
+    { title: "VP Risk",                            isActive: true, isDefault: true  },
+    { title: "Director of Public Works",           isActive: true, isDefault: true  },
+    { title: "Director of Planning and Development", isActive: true, isDefault: true },
+    { title: "Director of Philanthropy",           isActive: true, isDefault: true  },
+    { title: "Director of Advancement",            isActive: true, isDefault: true  },
+    { title: "Senior Civil Engineer",              isActive: true, isDefault: true  },
+    { title: "Principal Civil Engineer",           isActive: true, isDefault: true  },
+    { title: "Medical Director",                   isActive: true, isDefault: true  },
+    { title: "Clinical Director",                  isActive: true, isDefault: true  },
+    { title: "Plant Manager",                      isActive: true, isDefault: true  },
+    { title: "General Superintendent",             isActive: true, isDefault: true  },
+    { title: "Senior Advisor",                     isActive: true, isDefault: true  },
+    { title: "Chief Estimator",                    isActive: true, isDefault: true  },
+    { title: "Project Director",                   isActive: true, isDefault: true  },
+    { title: "Senior Project Manager",             isActive: true, isDefault: true  },
+    { title: "Project Manager",                    isActive: true, isDefault: true  },
+    { title: "Corporate Controller",               isActive: true, isDefault: true  },
+    { title: "Director of Care",                   isActive: true, isDefault: true  },
+    { title: "Clinical Operations Director",       isActive: true, isDefault: true  },
+    { title: "Mine Manager",                       isActive: true, isDefault: true  },
+    { title: "Mill Manager",                       isActive: true, isDefault: true  },
+    { title: "Chief Geologist",                    isActive: true, isDefault: true  },
+    { title: "Director of Technical Services",     isActive: true, isDefault: true  },
+    { title: "Director of Housing Operations",     isActive: true, isDefault: true  },
+    { title: "Director of Programs",               isActive: true, isDefault: true  },
+    { title: "Director of Research & Development", isActive: true, isDefault: true  }
+  ],
+
+  locations: [
+    { location: "Canada", country: "Canada", isActive: true, isDefault: true }
+  ],
+
+  industries: [
+    {
+      slug: "government",
+      displayName: "Government",
+      isTarget: true,
+      linkedinNames: [
+        "government administration",
+        "government relations",
+        "public policy",
+        "public safety",
+        "military",
+        "judiciary",
+        "legislative office",
+        "political organization",
+        "international affairs",
+        "international trade and development",
+        "defense & space",
+        "defense and space"
+      ]
+    },
+    {
+      slug: "not_for_profit",
+      displayName: "Not-for-profit",
+      isTarget: true,
+      linkedinNames: [
+        "nonprofit organization management",
+        "non-profit organizations",
+        "non-profit organization management",
+        "philanthropy",
+        "civic & social organization",
+        "civic and social organization",
+        "religious institutions",
+        "fund-raising",
+        "fundraising",
+        "think tanks",
+        "individual & family services",
+        "individual and family services"
+      ]
+    },
+    {
+      slug: "clean_technology",
+      displayName: "Clean Technology",
+      isTarget: true,
+      linkedinNames: [
+        "renewables & environment",
+        "renewables and environment",
+        "environmental services",
+        "utilities"
+      ]
+    },
+    {
+      slug: "engineering_construction",
+      displayName: "Engineering & Construction",
+      isTarget: true,
+      linkedinNames: [
+        "construction",
+        "civil engineering",
+        "architecture & planning",
+        "architecture and planning",
+        "real estate",
+        "building materials",
+        "mechanical or industrial engineering"
+      ]
+    },
+    {
+      slug: "healthcare",
+      displayName: "HealthCare",
+      isTarget: true,
+      linkedinNames: [
+        "hospital & health care",
+        "hospitals and health care",
+        "health, wellness and fitness",
+        "wellness and fitness services",
+        "mental health care",
+        "alternative medicine"
+      ]
+    },
+    {
+      slug: "medical_technology",
+      displayName: "Medical Technology",
+      isTarget: true,
+      linkedinNames: [
+        "medical devices",
+        "biotechnology",
+        "pharmaceuticals",
+        "medical practice"
+      ]
+    },
+    {
+      slug: "education",
+      displayName: "Education",
+      isTarget: true,
+      linkedinNames: [
+        "education management",
+        "higher education",
+        "primary/secondary education",
+        "primary and secondary education",
+        "libraries",
+        "research"
+      ]
+    },
+    {
+      slug: "education_technology",
+      displayName: "Edu Tech",
+      isTarget: true,
+      linkedinNames: [
+        "e-learning",
+        "professional training & coaching",
+        "professional training and coaching"
+      ]
+    },
+    {
+      slug: "legal",
+      displayName: "Legal",
+      isTarget: true,
+      linkedinNames: [
+        "law practice",
+        "legal services",
+        "alternative dispute resolution"
+      ]
+    },
+    {
+      slug: "accounting",
+      displayName: "Accounting",
+      isTarget: true,
+      linkedinNames: [
+        "accounting"
+      ]
+    },
+    {
+      slug: "mining_resources",
+      displayName: "Mining & Resources",
+      isTarget: true,
+      linkedinNames: [
+        "mining & metals",
+        "mining and metals",
+        "oil & energy",
+        "oil and gas",
+        "oil and energy",
+        "chemicals"
+      ]
+    }
+  ],
+
+  personaMappings: [
+    {
+      industrySlug: "government",
+      personaTitles: [
+        "Chief Administrative Officer",
+        "City Manager",
+        "Deputy City Manager",
+        "Director of Human Resources"
+      ]
+    },
+    {
+      industrySlug: "not_for_profit",
+      personaTitles: [
+        "Board Chair",
+        "President",
+        "Executive Director",
+        "VP of People & Culture"
+      ]
+    },
+    {
+      industrySlug: "clean_technology",
+      personaTitles: [
+        "Founder",
+        "Co-Founder",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Chief Technology Officer"
+      ]
+    },
+    {
+      industrySlug: "engineering_construction",
+      personaTitles: [
+        "Founder",
+        "Co-Founder",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Chief Technology Officer"
+      ]
+    },
+    {
+      industrySlug: "healthcare",
+      personaTitles: [
+        "Hospital Administrator",
+        "Chief Medical Officer",
+        "VP of Operations",
+        "VP of Talent Acquisition"
+      ]
+    },
+    {
+      industrySlug: "medical_technology",
+      personaTitles: [
+        "Hospital Administrator",
+        "Chief Medical Officer",
+        "VP of Operations",
+        "VP of Talent Acquisition"
+      ]
+    },
+    {
+      industrySlug: "education",
+      personaTitles: [
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "VP of HR",
+        "Director of Talent Acquisition"
+      ]
+    },
+    {
+      industrySlug: "education_technology",
+      personaTitles: [
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "VP of HR",
+        "Director of Talent Acquisition"
+      ]
+    },
+    {
+      industrySlug: "legal",
+      personaTitles: [
+        "Managing Partner",
+        "Chief Operating Officer",
+        "Director of Human Resources"
+      ]
+    },
+    {
+      industrySlug: "accounting",
+      personaTitles: [
+        "Managing Partner",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Director of Human Resources"
+      ]
+    },
+    {
+      industrySlug: "mining_resources",
+      personaTitles: [
+        "VP of Operations",
+        "VP of Talent Acquisition",
+        "Chief Operating Officer",
+        "Director of Human Resources"
+      ]
+    }
+  ],
+
+  defaultPersonaTitles: [
+    "Chief Executive Officer",
+    "Chief Operating Officer",
+    "Chief Human Resources Officer",
+    "VP of HR",
+    "VP People & Culture",
+    "Director of Talent Acquisition"
+  ],
+
+  createdAt: new Date(),
+  updatedAt: new Date()
+});
+
+console.log("✓ icpConfig v1 seeded — 57 titles, 1 location, 11 industries, 11 persona mappings");

@@ -1,0 +1,34 @@
+# ── Environment / Secrets ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node (UI) ───────────────────────────────────────────────────
+node_modules/
+.next/
+dist/
+build/
+.turbo/
+.vercel/
+
+# ── Python (BE) ─────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# ── IDE / OS ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs & misc ─────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
