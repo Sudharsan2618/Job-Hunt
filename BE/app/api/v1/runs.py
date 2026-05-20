@@ -145,3 +145,32 @@ async def get_run_jobs(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching jobs: {str(e)}")
+
+
+# ── DELETE /{run_id} ─────────────────────────────────────────────────────
+
+@router.delete("/{run_id}")
+async def delete_run(run_id: str, db=Depends(get_db)):
+    try:
+        runs_col = db["runs"]
+        jobs_col = db["jobs"]
+        run_oid = ObjectId(run_id)
+
+        # Delete associated jobs
+        jobs_res = await jobs_col.delete_many({"runId": run_oid})
+
+        # Delete the run itself
+        runs_res = await runs_col.delete_one({"_id": run_oid})
+
+        if runs_res.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        return {
+            "success": True,
+            "message": "Run and associated jobs deleted successfully",
+            "deleted_jobs_count": jobs_res.deleted_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting run: {str(e)}")

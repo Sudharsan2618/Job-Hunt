@@ -26,6 +26,13 @@ class RunConfigSchema(BaseModel):
     resultsPerSearch: int
     siteName: List[str]
     icpConfigSnapshot: Optional[ICPConfigSnapshotSchema] = None
+    
+    # Naukri & Rejection Filter configurations
+    searchUrl: Optional[str] = None
+    scrapeDescriptions: Optional[bool] = True
+    maxDescriptions: Optional[int] = 10
+    minExperience: Optional[int] = None
+    maxExperience: Optional[int] = None
 
 
 class RunCreateSchema(BaseModel):

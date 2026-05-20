@@ -99,12 +99,6 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* ── Global Sidebar ── */}
       <aside className="fixed left-0 top-14 bottom-0 w-56 bg-[#0f172a] text-white flex flex-col z-40">
-        {/* Brand */}
-        <div className="p-4 border-b border-[#1e293b]">
-          <h2 className="font-bold text-lg text-white">LeadGen AI</h2>
-          <p className="text-[10px] uppercase tracking-widest text-[#64748b] mt-0.5">The Digital Curator</p>
-        </div>
-
         {/* Navigation (fixed global order) */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {globalNavItems.map((item) => {

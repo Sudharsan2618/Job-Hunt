@@ -3,6 +3,7 @@ JobSpy Background Service
 Scrape jobs → check uniqueness → reject/accept by title → store in jobs collection.
 """
 
+import asyncio
 import datetime as _dt
 from datetime import datetime
 from hashlib import sha1
@@ -185,7 +186,7 @@ async def scrape_and_store_jobs(
       total_scraped, inserted, duplicates, accepted, rejected
     """
     title_rejection = JobTitleRejectionService()
-    raw_jobs = _scrape_jobs(run_config)
+    raw_jobs = await asyncio.to_thread(_scrape_jobs, run_config)
 
     now = datetime.utcnow()
     total_scraped = len(raw_jobs)

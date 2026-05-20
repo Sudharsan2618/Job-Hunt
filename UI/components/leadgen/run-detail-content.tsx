@@ -3,74 +3,56 @@
 import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import {
-  CheckCircle,
-  ListFilter,
-  Sparkles,
-  Users,
-  Upload,
-  Search,
-  ShieldCheck,
-  TrendingUp,
-  FolderOpen,
   ArrowLeft,
-  Building2,
-  Briefcase,
-  XCircle,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
   ExternalLink,
+  Layers,
+  Calendar,
+  Settings,
+  Info,
+  ChevronRight,
+  Sparkles,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { fetchRun, fetchRunJobs, type Run, type RunJob, type RunJobsResponse } from "@/lib/api"
+import { fetchRun, type Run } from "@/lib/api"
 
 interface RunDetailContentProps {
   runId: string
 }
 
-type JobFilter = "all" | "good" | "poor"
-
 export function RunDetailContent({ runId }: RunDetailContentProps) {
   const router = useRouter()
   const [run, setRun] = useState<Run | null>(null)
-  const [jobsResp, setJobsResp] = useState<RunJobsResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [jobPage, setJobPage] = useState(1)
-  const [jobFilter, setJobFilter] = useState<JobFilter>("all")
-  const jobLimit = 20
 
   const loadRun = useCallback(async () => {
     try {
       const data = await fetchRun(runId)
       setRun(data)
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+    }
   }, [runId])
-
-  const loadJobs = useCallback(async () => {
-    try {
-      const quality = jobFilter === "all" ? undefined : jobFilter
-      const data = await fetchRunJobs(runId, jobPage, jobLimit, quality)
-      setJobsResp(data)
-    } catch (e) { console.error(e) }
-  }, [runId, jobPage, jobFilter])
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([loadRun(), loadJobs()]).finally(() => setLoading(false))
-  }, [loadRun, loadJobs])
+    loadRun().finally(() => setLoading(false))
+  }, [loadRun])
 
   // Auto-refresh if run is active
   useEffect(() => {
     if (!run || run.status !== "active") return
-    const id = setInterval(() => { loadRun(); loadJobs() }, 6000)
+    const id = setInterval(() => {
+      loadRun()
+    }, 6000)
     return () => clearInterval(id)
-  }, [run, loadRun, loadJobs])
+  }, [run, loadRun])
 
   if (loading && !run) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <Loader2 className="w-6 h-6 animate-spin text-[#0061ff]" />
+        <Loader2 className="w-6 h-6 animate-spin text-[#004bca]" />
       </div>
     )
   }
@@ -91,51 +73,6 @@ export function RunDetailContent({ runId }: RunDetailContentProps) {
   const isCompleted = run.status === "completed"
   const isCancelled = run.status === "cancelled"
 
-  // Pipeline steps
-  const steps = [
-    {
-      id: 1,
-      name: "Scraping Jobs",
-      status: (stats.totalJobsScraped > 0 || isCompleted || isCancelled) ? "completed" : isActive ? "active" : "pending",
-    },
-    {
-      id: 2,
-      name: "Title Rejection",
-      status: (stats.acceptedJobs !== undefined && stats.acceptedJobs > 0) || isCompleted || isCancelled ? "completed" : isActive ? "active" : "pending",
-    },
-    {
-      id: 3,
-      name: "Company Enrichment",
-      status: (stats.uniqueCompanies ?? 0) > 0 || isCompleted ? "completed" : isActive ? "active" : "pending",
-    },
-    {
-      id: 4,
-      name: "Company Rejection",
-      status: isCompleted ? "completed" : (stats.uniqueCompanies ?? 0) > 0 && isActive ? "active" : "pending",
-    },
-    {
-      id: 5,
-      name: "Done",
-      status: isCompleted ? "completed" : "pending",
-    },
-  ]
-
-  const getStepIcon = (step: typeof steps[0]) => {
-    switch (step.status) {
-      case "completed":
-        return <CheckCircle className="w-5 h-5 text-white" />
-      case "active":
-        return <ListFilter className="w-5 h-5 text-[#0061ff]" />
-      default:
-        switch (step.id) {
-          case 3: return <Building2 className="w-5 h-5 text-[#565e74]" />
-          case 4: return <ShieldCheck className="w-5 h-5 text-[#565e74]" />
-          case 5: return <Upload className="w-5 h-5 text-[#565e74]" />
-          default: return <Search className="w-5 h-5 text-[#565e74]" />
-        }
-    }
-  }
-
   const statusBadge = () => {
     if (isActive) return <Badge className="bg-emerald-100 text-emerald-700 border-0">Active</Badge>
     if (isCompleted) return <Badge className="bg-blue-100 text-blue-700 border-0">Completed</Badge>
@@ -143,242 +80,196 @@ export function RunDetailContent({ runId }: RunDetailContentProps) {
     return <Badge variant="secondary">{run.status}</Badge>
   }
 
-  // Compute progress %
-  const completedSteps = steps.filter((s) => s.status === "completed").length
-  const progress = Math.round((completedSteps / steps.length) * 100)
+  const mode = run.source || "jobspy"
+  const modeDisplay = mode === "mixed" ? "JobSpy + Naukri" : mode
 
-  const jobs = jobsResp?.jobs ?? []
-  const totalJobs = jobsResp?.total ?? 0
-  const totalPages = jobsResp?.pages ?? 1
+  // Naukri URL construction helper
+  let naukriUrls: string[] = []
+  if (mode === "naukri" || mode === "mixed") {
+    if (run.runConfig?.searchUrl) {
+      naukriUrls = [run.runConfig.searchUrl]
+    } else {
+      const titles = run.runConfig?.searchTitles || []
+      const locations = run.runConfig?.searchLocations || ["chennai"]
+      for (const title of titles) {
+        for (const loc of locations) {
+          const t_slug = title
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, "")
+            .replace(/[\s-]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+          const l_slug = loc
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, "")
+            .replace(/[\s-]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+          
+          const q_title = encodeURIComponent(title)
+          const q_loc = encodeURIComponent(loc)
+          if (l_slug) {
+            naukriUrls.push(`https://www.naukri.com/${t_slug}-jobs-in-${l_slug}?k=${q_title}&l=${q_loc}`)
+          } else {
+            naukriUrls.push(`https://www.naukri.com/${t_slug}-jobs?k=${q_title}`)
+          }
+        }
+      }
+    }
+  }
 
   return (
     <div className="p-8">
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         {/* Back button */}
         <button
           onClick={() => router.push("/search-history")}
-          className="flex items-center gap-2 text-sm text-[#565e74] hover:text-[#191c1e] mb-6 transition-colors"
+          className="flex items-center gap-2 text-sm text-[#565e74] hover:text-[#191c1e] mb-6 transition-colors font-medium"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Runs
         </button>
 
-        {/* Header */}
-        <div className="flex items-start justify-between mb-8">
+        {/* Header Block */}
+        <div className="flex items-start justify-between border-b border-[#e0e3e5]/60 pb-6 mb-8 gap-4 flex-wrap">
           <div>
-            <div className="flex items-center gap-3 mb-2">
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
               <h1 className="text-3xl font-bold text-[#191c1e]">{run.title}</h1>
               {statusBadge()}
             </div>
-            <div className="flex items-center gap-2 text-[#565e74]">
-              <FolderOpen className="w-4 h-4" />
-              <span className="text-sm">
-                {run.runConfig.searchTitles.join(", ")} &middot; {run.runConfig.searchLocations.join(", ")}
+            <p className="text-sm text-[#565e74]">
+              Run ID: <span className="font-mono text-xs">{run.id || run._id}</span>
+            </p>
+          </div>
+          
+          <Button
+            onClick={() => router.push(`/runs/${runId}/results`)}
+            className="bg-[#004bca] hover:bg-[#003ea8] text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-md hover:shadow-lg flex items-center gap-2"
+          >
+            <span>View Results</span>
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+        </div>
+
+        {/* Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          
+          {/* Mode Card */}
+          <div className="bg-white rounded-2xl border border-[#e0e3e5] p-6 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-bold text-[#565e74] uppercase tracking-wider">Scraper Mode</span>
+                <Layers className="w-4.5 h-4.5 text-[#004bca]" />
+              </div>
+              <p className="text-2xl font-extrabold text-[#191c1e] capitalize">{modeDisplay}</p>
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <span className="text-xs text-[#737687]">
+                Using {mode === "mixed" ? "JobSpy + Naukri" : mode === "naukri" ? "Naukri Scraper" : "JobSpy Library"}
               </span>
             </div>
           </div>
-          <div className="text-right">
-            <p className="text-xs text-[#0061ff] uppercase tracking-wider font-medium mb-1">Progress</p>
-            <p className="text-2xl font-bold text-[#191c1e]">{progress}%</p>
-            <div className="w-32 h-2 bg-[#e0e3e5] rounded-full mt-2 overflow-hidden">
-              <div
-                className="h-full bg-[#0061ff] rounded-full transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
-        </div>
 
-        {/* Pipeline Steps */}
-        <div className="flex items-center justify-between mb-8 px-4">
-          {steps.map((step, index) => (
-            <div key={step.id} className="flex items-center">
-              <div className="flex flex-col items-center">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                  step.status === "completed"
-                    ? "bg-[#0061ff]"
-                    : step.status === "active"
-                      ? "border-2 border-[#0061ff] bg-white"
-                      : "border border-[#e0e3e5] bg-white"
-                }`}>
-                  {getStepIcon(step)}
-                </div>
-                <p className={`mt-2 text-xs uppercase tracking-wider font-medium ${
-                  step.status === "active" ? "text-[#0061ff]" : "text-[#565e74]"
-                }`}>
-                  {step.status === "active" ? "Active" : `Step ${step.id}`}
-                </p>
-                <p className={`text-sm font-medium ${
-                  step.status === "pending" ? "text-[#94a3b8]" : "text-[#191c1e]"
-                }`}>
-                  {step.name}
-                </p>
+          {/* Duration Card */}
+          <div className="bg-white rounded-2xl border border-[#e0e3e5] p-6 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-bold text-[#565e74] uppercase tracking-wider">Timeline</span>
+                <Calendar className="w-4.5 h-4.5 text-[#004bca]" />
               </div>
-              {index < steps.length - 1 && (
-                <div className={`w-16 h-0.5 mx-4 ${
-                  step.status === "completed" ? "bg-[#0061ff]" : "bg-[#e0e3e5]"
-                }`} />
-              )}
+              <div className="space-y-1 text-xs">
+                <p className="text-[#565e74] font-medium">
+                  Start: <span className="text-[#191c1e] font-mono">{run.runStartedAt ? new Date(run.runStartedAt).toLocaleTimeString() : "—"}</span>
+                </p>
+                {run.runEndedAt && (
+                  <p className="text-[#565e74] font-medium">
+                    End: <span className="text-[#191c1e] font-mono">{new Date(run.runEndedAt).toLocaleTimeString()}</span>
+                  </p>
+                )}
+              </div>
             </div>
-          ))}
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <span className="text-xs text-[#737687]">
+                {run.createdAt ? new Date(run.createdAt).toLocaleDateString() : "—"}
+              </span>
+            </div>
+          </div>
+
+          {/* Config Card */}
+          <div className="bg-white rounded-2xl border border-[#e0e3e5] p-6 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-bold text-[#565e74] uppercase tracking-wider">Parameters</span>
+                <Settings className="w-4.5 h-4.5 text-[#004bca]" />
+              </div>
+              <div className="text-xs text-[#424656] space-y-1">
+                <div><span className="font-semibold text-[#191c1e]">Titles:</span> {run.runConfig?.searchTitles?.join(", ") || "—"}</div>
+                <div><span className="font-semibold text-[#191c1e]">Locations:</span> {run.runConfig?.searchLocations?.join(", ") || "—"}</div>
+              </div>
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <span className="text-xs text-[#737687]">
+                Limit: {run.runConfig?.resultsPerSearch ?? 0} jobs/search
+              </span>
+            </div>
+          </div>
+
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-xl border border-[#e0e3e5] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-wider text-[#0061ff] font-medium">Jobs Scraped</p>
-              <Search className="w-4 h-4 text-[#94a3b8]" />
-            </div>
-            <p className="text-3xl font-bold text-[#191c1e]">{stats.totalJobsScraped.toLocaleString()}</p>
-            <div className="flex items-center gap-1 mt-2">
-              {isActive ? (
-                <>
-                  <TrendingUp className="w-3 h-3 text-[#10b981]" />
-                  <span className="text-xs text-[#10b981] font-medium">SCANNING LIVE</span>
-                </>
-              ) : (
-                <span className="text-xs text-[#94a3b8] font-medium">{stats.inserted ?? 0} new, {stats.duplicates ?? 0} dupes</span>
-              )}
-            </div>
-          </div>
-
-          <div className={`bg-white rounded-xl p-5 ${isCompleted ? "border-2 border-[#0061ff]" : "border border-[#e0e3e5]"}`}>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-wider text-[#0061ff] font-medium">Jobs Accepted</p>
-              <ShieldCheck className="w-4 h-4 text-[#0061ff]" />
-            </div>
-            <p className="text-3xl font-bold text-[#191c1e]">{stats.acceptedJobs ?? 0}</p>
-            <div className="flex items-center gap-1 mt-2">
-              <span className="text-xs text-red-500 font-medium">{stats.rejectedJobs ?? 0} rejected by title</span>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-[#e0e3e5] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-wider text-[#565e74] font-medium">Companies</p>
-              <Building2 className="w-4 h-4 text-[#94a3b8]" />
-            </div>
-            <p className="text-3xl font-bold text-[#191c1e]">{stats.uniqueCompanies ?? 0}</p>
-            <p className="text-xs text-[#94a3b8] mt-2">
-              <span className="text-emerald-600 font-medium">{stats.acceptedCompanies ?? 0}</span> accepted,{" "}
-              <span className="text-red-500 font-medium">{stats.rejectedCompanies ?? 0}</span> rejected
-            </p>
-          </div>
-
-          <div className="bg-white rounded-xl border border-[#e0e3e5] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-wider text-[#565e74] font-medium">Skipped</p>
-              <XCircle className="w-4 h-4 text-[#94a3b8]" />
-            </div>
-            <p className="text-3xl font-bold text-[#94a3b8]">{stats.skippedCompanies ?? 0}</p>
-            <p className="text-xs text-[#94a3b8] mt-2">No LinkedIn data</p>
-          </div>
-        </div>
-
-        {/* Jobs Table */}
-        <div className="bg-white rounded-2xl overflow-hidden">
-          {/* Table Header */}
-          <div className="px-6 py-4 border-b border-[#e0e3e5] flex items-center justify-between">
-            <h3 className="font-semibold text-[#191c1e]">Jobs ({totalJobs})</h3>
-            <div className="flex items-center gap-1 bg-[#f2f4f6] p-1 rounded-lg">
-              {(["all", "good", "poor"] as JobFilter[]).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => { setJobFilter(f); setJobPage(1) }}
-                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
-                    jobFilter === f
-                      ? "bg-white shadow-sm text-[#004bca]"
-                      : "text-[#424656] hover:bg-[#e6e8ea]"
-                  }`}
-                >
-                  {f === "all" ? "All" : f === "good" ? "Accepted" : "Rejected"}
-                </button>
+        {/* Naukri URL Section */}
+        {mode === "naukri" && naukriUrls.length > 0 && (
+          <div className="bg-slate-50 border border-[#e0e3e5] rounded-2xl p-6 mb-8">
+            <h3 className="text-xs font-bold text-[#565e74] uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <Info className="w-4 h-4 text-[#004bca]" />
+              Naukri Search URL
+            </h3>
+            <div className="space-y-2">
+              {naukriUrls.map((url, idx) => (
+                <div key={idx} className="flex items-center justify-between bg-white border border-[#e0e3e5]/70 rounded-xl px-4 py-2.5 text-xs">
+                  <span className="font-mono text-[#424656] truncate max-w-[85%]">{url}</span>
+                  <a href={url} target="_blank" rel="noopener noreferrer" className="text-[#004bca] hover:text-[#003ea8] flex items-center gap-0.5 ml-2 font-semibold">
+                    Open <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
               ))}
             </div>
           </div>
+        )}
 
-          {jobs.length === 0 ? (
-            <div className="py-16 text-center text-sm text-[#94a3b8]">
-              {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "No jobs found for this filter."}
+        {/* Metadata Details */}
+        <div className="bg-white border border-[#e0e3e5] rounded-2xl p-8 shadow-sm">
+          <h2 className="text-base font-bold text-[#191c1e] mb-6 flex items-center gap-2">
+            <Sparkles className="w-4.5 h-4.5 text-[#004bca]" />
+            Execution Stats & Metadata
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            
+            <div className="bg-[#f8fafc] border border-slate-100 rounded-xl p-4 text-center">
+              <p className="text-[10px] font-bold text-[#737687] uppercase tracking-wider mb-1">Scraped</p>
+              <p className="text-2xl font-extrabold text-[#191c1e]">{stats.totalJobsScraped.toLocaleString()}</p>
             </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-[#f2f4f6]">
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Title</th>
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Company</th>
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Location</th>
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Board</th>
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Quality</th>
-                      <th className="px-6 py-3 text-[11px] font-bold uppercase tracking-wider text-[#737687]">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#c2c6d9]/10">
-                    {jobs.map((job) => (
-                      <tr key={job._id} className="hover:bg-[#f2f4f6] transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-sm text-[#191c1e]">{job.title}</span>
-                            {job.jobDetails?.jobUrl && (
-                              <a href={job.jobDetails.jobUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                                <ExternalLink className="w-3 h-3 text-[#94a3b8] hover:text-[#0061ff]" />
-                              </a>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-[#424656]">{job.company}</td>
-                        <td className="px-6 py-4 text-sm text-[#424656]">{job.location}</td>
-                        <td className="px-6 py-4">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#f2f4f6] text-[#424656]">{job.boardName}</span>
-                        </td>
-                        <td className="px-6 py-4">
-                          {job.qualityStatus === "good" ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
-                              <CheckCircle className="w-3 h-3" /> Good
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-xs font-bold text-red-500">
-                              <XCircle className="w-3 h-3" /> Poor
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-xs text-[#737687] max-w-[200px] truncate">{job.rejectionReason || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
 
-              {/* Jobs Pagination */}
-              <div className="px-6 py-4 bg-[#f2f4f6] flex items-center justify-between">
-                <div className="text-xs text-[#424656] font-medium">
-                  Page <span className="font-mono">{jobPage}</span> of <span className="font-mono">{totalPages}</span>
-                  {" "}({totalJobs} total)
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setJobPage((p) => Math.max(1, p - 1))}
-                    disabled={jobPage <= 1}
-                    className="p-1.5 rounded-lg hover:bg-[#e6e8ea] text-[#737687] disabled:opacity-30"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span className="px-3 py-1 rounded-lg text-xs font-bold bg-[#004bca] text-white">{jobPage}</span>
-                  <button
-                    onClick={() => setJobPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={jobPage >= totalPages}
-                    className="p-1.5 rounded-lg hover:bg-[#e6e8ea] text-[#737687] disabled:opacity-30"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
+            <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-4 text-center">
+              <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider mb-1">Accepted</p>
+              <p className="text-2xl font-extrabold text-emerald-800">{stats.acceptedJobs ?? 0}</p>
+            </div>
+
+            <div className="bg-red-50/50 border border-red-100 rounded-xl p-4 text-center">
+              <p className="text-[10px] font-bold text-red-700 uppercase tracking-wider mb-1">Rejected</p>
+              <p className="text-2xl font-extrabold text-red-800">{stats.rejectedJobs ?? 0}</p>
+            </div>
+
+            <div className="bg-sky-50/50 border border-sky-100 rounded-xl p-4 text-center">
+              <p className="text-[10px] font-bold text-sky-700 uppercase tracking-wider mb-1">Inserted</p>
+              <p className="text-2xl font-extrabold text-sky-800">{stats.inserted ?? 0}</p>
+            </div>
+
+            <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-4 text-center col-span-2 md:col-span-1">
+              <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1">Duplicates</p>
+              <p className="text-2xl font-extrabold text-amber-800">{stats.duplicates ?? 0}</p>
+            </div>
+
+          </div>
         </div>
+
       </div>
     </div>
   )

@@ -32,6 +32,13 @@ class RunConfigModel(BaseModel):
     siteName: List[str]
     icpConfigSnapshot: Optional[ICPConfigSnapshotModel] = None
 
+    # Naukri & Rejection Filter configurations
+    searchUrl: Optional[str] = None
+    scrapeDescriptions: Optional[bool] = True
+    maxDescriptions: Optional[int] = 10
+    minExperience: Optional[int] = None
+    maxExperience: Optional[int] = None
+
 
 class RunsModel(BaseModel):
     """MongoDB document model for runs collection"""

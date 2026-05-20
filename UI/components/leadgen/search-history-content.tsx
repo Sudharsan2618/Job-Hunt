@@ -16,13 +16,14 @@ import {
   Sparkles,
   Plus,
   Loader2,
-  CheckCircle,
   XCircle,
   Clock,
   MapPin,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { fetchRuns, type Run } from "@/lib/api"
+import { fetchRuns, deleteRun, type Run } from "@/lib/api"
 
 type FilterTab = "all" | "completed" | "active"
 
@@ -50,6 +51,28 @@ export function SearchHistoryContent() {
   const [hasMore, setHasMore] = useState(true)
   const [activeFilter, setActiveFilter] = useState<FilterTab>("all")
   const limit = 10
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const handleDeleteClick = (runId: string) => {
+    setDeleteConfirmId(runId)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmId) return
+    setIsDeleting(true)
+    try {
+      await deleteRun(deleteConfirmId)
+      setDeleteConfirmId(null)
+      load() // Refresh list
+    } catch (e) {
+      console.error(e)
+      alert("Failed to delete run: " + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setIsDeleting(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -217,7 +240,7 @@ export function SearchHistoryContent() {
                             </div>
                             <div>
                               <div className="font-bold text-[#191c1e] group-hover:text-[#004bca] transition-colors">{run.title}</div>
-                              <div className="text-xs text-[#737687]">{run.source}</div>
+                              <div className="text-xs text-[#737687] capitalize">{run.source === "mixed" ? "JobSpy + Naukri" : run.source}</div>
                             </div>
                           </div>
                         </td>
@@ -262,12 +285,24 @@ export function SearchHistoryContent() {
 
                         {/* Action */}
                         <td className="px-6 py-5 text-right">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); router.push(`/runs/${id}`) }}
-                            className="px-3 py-1.5 text-xs font-bold bg-[#e6e8ea] text-[#191c1e] rounded-lg hover:bg-[#004bca] hover:text-white transition-all"
-                          >
-                            View Details
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); router.push(`/runs/${id}`) }}
+                              className="px-3 py-1.5 text-xs font-bold bg-[#e6e8ea] text-[#191c1e] rounded-lg hover:bg-[#004bca] hover:text-white transition-all"
+                            >
+                              View Details
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (id) handleDeleteClick(id);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                              title="Delete Run"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -302,6 +337,59 @@ export function SearchHistoryContent() {
           </>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all duration-200">
+          <div 
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center text-red-600 shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Delete Run Data?</h3>
+                <p className="text-xs text-slate-500 mt-0.5">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              Are you sure you want to delete this run and all its associated jobs entirely? This will remove the run from your history and purge the collected jobs from the database.
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmId(null)}
+                disabled={isDeleting}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-bold transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Delete Run
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

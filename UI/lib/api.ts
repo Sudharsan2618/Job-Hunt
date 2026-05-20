@@ -19,6 +19,7 @@ export interface RunConfig {
   hoursOld: number
   resultsPerSearch: number
   siteName: string[]
+  searchUrl?: string
   icpConfigSnapshot?: { icpConfigId: string | null; version: number } | null
 }
 
@@ -84,6 +85,14 @@ export async function fetchRuns(page = 1, limit = 10): Promise<Run[]> {
 export async function fetchRun(id: string): Promise<Run> {
   const res = await fetch(`${API_BASE}/api/v1/runs/${id}`)
   if (!res.ok) throw new Error("Failed to fetch run")
+  return res.json()
+}
+
+export async function deleteRun(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/v1/runs/${id}`, {
+    method: "DELETE",
+  })
+  if (!res.ok) throw new Error("Failed to delete run")
   return res.json()
 }
 

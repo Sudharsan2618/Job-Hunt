@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     LINKEDIN_EMAIL: str = Field(default="", description="LinkedIn login email")
     LINKEDIN_PASSWORD: str = Field(default="", description="LinkedIn login password")
 
+    # Firecrawl Configuration
+    FIRECRAWL_API_KEY: str = Field(default="fc-a5218360c4624ed9b764dc0305c9d0ba", description="Firecrawl API Key")
+
     # Company rejection thresholds
     MAX_STAFF_COUNT: int = Field(default=10000, description="Reject companies with more employees than this")
 

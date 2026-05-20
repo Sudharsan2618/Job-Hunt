@@ -161,7 +161,7 @@ export function ProspectDetailsModal({ prospect, isOpen, onClose }: ProspectDeta
               )).reduce((acc, curr, i) => {
                 if (i === 0) return [curr]
                 return [...acc, curr]
-              }, [] as JSX.Element[])}
+              }, [] as any[])}
             </p>
           </div>
 
