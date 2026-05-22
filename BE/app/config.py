@@ -9,22 +9,37 @@ class Settings(BaseSettings):
     # MongoDB Configuration
     MONGODB_URI: str = Field(description="MongoDB connection string")
     DATABASE_NAME: str = Field(default="Job-Hunt", description="Database name")
-    
+
     # API Configuration
     API_V1_PREFIX: str = "/api/v1"
-    
+
     # CORS Configuration
-    CORS_ORIGINS: list[str] = Field(default=["http://localhost:3000","https://job-hunt-kappa-two.vercel.app"], description="Allowed CORS origins")
+    CORS_ORIGINS: list[str] = Field(
+        default=["http://localhost:3000", "https://job-hunt-kappa-two.vercel.app"],
+        description="Allowed CORS origins",
+    )
 
     # LinkedIn Credentials (for company info API)
     LINKEDIN_EMAIL: str = Field(default="", description="LinkedIn login email")
     LINKEDIN_PASSWORD: str = Field(default="", description="LinkedIn login password")
 
     # Firecrawl Configuration
-    FIRECRAWL_API_KEY: str = Field(default="fc-a5218360c4624ed9b764dc0305c9d0ba", description="Firecrawl API Key")
+    FIRECRAWL_API_KEY: str = Field(
+        default="fc-a5218360c4624ed9b764dc0305c9d0ba",
+        description="Firecrawl API Key",
+    )
 
-    # Company rejection thresholds
-    MAX_STAFF_COUNT: int = Field(default=10000, description="Reject companies with more employees than this")
+    # OpenAI (Phase 2 — company industry resolution)
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
+
+    # Apollo (Phase 3 — prospect search)
+    APOLLO_API_KEY: str = Field(default="", description="Apollo.io API key")
+
+    # Company rejection threshold
+    MAX_STAFF_COUNT: int = Field(
+        default=10000,
+        description="Reject companies with more employees than this",
+    )
 
     model_config = {
         "env_file": ".env",
@@ -32,113 +47,180 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
-    
 
-# Accept these titles (Gen AI / Software Engineering roles)
+# ────────────────────────────────────────────────────────────────────────────
+# Title filter keywords — executive / leadership level
+# (ported from reference/config.py)
+# ────────────────────────────────────────────────────────────────────────────
+
 ACCEPTED_TITLE_KEYWORDS = [
-    # Gen AI Engineer
-    "gen ai engineer", "generative ai engineer", "gen ai",
-    "generative ai",
-
-    # Agentic AI Engineer
-    "agentic ai engineer", "agentic ai", "ai agent engineer",
-    "autonomous ai engineer",
-
-    # Python Engineer/Developer
-    "python engineer", "python developer", "python programmer",
-    "python software engineer",
-
-    # Software Engineer
-    "software engineer", "software developer", "software programmer",
-    "swe", "sde",
-
-    # Machine Learning
-    "machine learning engineer", "machine learning developer", "machine learning programmer",
-    "ml engineer", "ml developer", "ml programmer","AI/ML Engineer","AI/ML Developer","AI/ML Programmer","AI/ML"
+    # C-Suite
+    "ceo", "cfo", "coo", "cto", "cio", "cmo", "chro", "cro",
+    "chief executive", "chief financial", "chief operating",
+    "chief technology", "chief information", "chief medical",
+    "chief human resources", "chief revenue", "chief administrative",
+    "chief nursing", "chief product", "chief sustainability",
+    "chief risk", "chief data", "chief marketing",
+    # Executive
+    "executive director", "managing director", "general manager",
+    "president", "city manager", "town manager", "deputy city manager",
+    "general counsel",
+    # VP
+    "vice president", "vp ", "vp,", "avp", "assistant vice president",
+    "senior vice president", "svp",
+    # Director
+    "director",
+    # Head
+    "head of",
+    # Senior Advisor
+    "senior advisor",
+    # Other leadership
+    "plant manager", "general superintendent",
+    "board director",
 ]
 
-# Reject all other titles
+# Reject these titles (non-executive roles that might contain exec keywords)
 REJECTED_TITLE_KEYWORDS = [
-    # Everything else gets rejected by default (catch-all approach)
-    # Explicitly reject common non-target roles to be safe
-    "manager", "director", "vp", "vice president", "president",
-    "analyst", "consultant", "architect", "devops", "data engineer",
-    "data scientist","Remote",
-    "backend engineer", "frontend engineer", "full stack", "fullstack",
-    "qa engineer", "test engineer", "security engineer",
-    "product manager", "project manager", "scrum master",
-    "designer", "ux", "ui", "researcher", "scientist",
-    "intern", "junior", "associate", "coordinator", "assistant",
-    "recruiter", "hr", "marketing", "sales", "finance", "legal",
-    "operations", "support", "customer success",
+    "assistant to", "secretary to", "office of the ceo",
+    "executive assistant", "admin assistant",
+    "coordinator", "analyst", "intern", "junior",
+    "mayor", "councillor", "council member", "elected",
+    "board directors", "non-director committee", "volunteer",
 ]
 
-# Industries to ACCEPT (IT & Software only)
-TARGET_INDUSTRY_KEYWORDS = [
-    # Information Technology
-    "information technology", "it services", "it consulting",
-    "it solutions", "managed services", "tech services",
-    # Software
-    "software", "saas", "software development", "software solutions",
-    "software company", "software house",
-    # Cloud & Infrastructure
-    "cloud", "cloud computing", "cloud services",
-    # Internet & Digital
-    "internet", "digital services", "digital solutions",
-    # Cybersecurity
-    "cybersecurity", "cyber security", "information security",
-    # Data & AI
-    "data", "artificial intelligence", "machine learning",
-    "data analytics", "big data",
-    # Computer & Hardware
-    "computer", "semiconductor", "hardware",
+# ────────────────────────────────────────────────────────────────────────────
+# Apollo API settings
+# ────────────────────────────────────────────────────────────────────────────
+
+APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
+APOLLO_PER_PAGE = 100
+APOLLO_BULK_BATCH_SIZE = 10
+APOLLO_SENIORITIES = ["c_suite", "vp", "head", "director"]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Buyer-persona filter rules (used by ProspectPreFilter / ProspectPostFilter)
+# ────────────────────────────────────────────────────────────────────────────
+
+HR_KEYWORDS = ["hr", "human resource", "people", "talent", "recruitment", "workforce", "culture"]
+OPS_KEYWORDS = ["operation", "ops"]
+CSUITE_SENIORITIES = {"c_suite", "owner", "founder", "partner"}
+WANTED_FUNCTIONS = ["hr", "human resource", "people", "talent", "operation", "ops"]
+UNWANTED_FUNCTIONS = [
+    "finance", "financial", "marketing", "sales", "technology", "tech",
+    "analytics", "asset", "culinary", "food", "recreation", "care",
+    "clinical", "medical", "information technology",
 ]
 
-# Reject all other industries
-REJECTED_INDUSTRY_KEYWORDS = [
-    # Government
-    "government", "public administration", "public policy", "municipal",
-    "provincial", "federal", "crown corporation", "civic", "public sector",
-    # Not-for-profit
-    "non-profit", "nonprofit", "not-for-profit", "ngo", "foundation",
-    "charity", "charitable", "social enterprise", "philanthropy",
-    # Clean Technology
-    "renewable", "solar", "wind energy", "clean tech", "cleantech",
-    "sustainability", "carbon", "environmental services", "green energy",
-    # Engineering & Construction
-    "construction", "civil engineering", "building materials",
-    "architecture", "infrastructure", "real estate",
-    # Healthcare
-    "hospital", "health care", "healthcare", "medical practice",
-    "mental health", "wellness", "clinics", "health authority",
-    # Medical Technology
-    "medical device", "medtech", "biotech", "biotechnology",
-    "diagnostics", "pharmaceutical", "digital health",
-    # Education
-    "education", "higher education", "primary", "secondary",
-    "school", "university", "college", "k-12",
-    # Education Technology
-    "e-learning", "edtech", "online training", "education technology",
-    # Legal
-    "law practice", "legal", "law firm",
-    # Accounting
-    "accounting", "audit", "bookkeeping", "tax",
-    # Mining & Resources
-    "mining", "oil", "gas", "natural resources", "metals",
-    "quarrying", "petroleum",
-    # Staffing & HR
-    "staffing", "recruiting", "recruitment", "employment",
-    "human resources services", "temporary help",
-    # Consulting
-    "consulting", "management consulting", "business consulting",
-    "outsourcing", "professional services",
-    # Marketing & Advertising
-    "advertising", "marketing", "public relations",
-    # Finance
-    "venture capital", "private equity", "investment",
-    "banking", "financial services", "insurance",
-    # Design
-    "design services",
+# Per-industry exclusions from UNWANTED_FUNCTIONS — keyed by normalized industry name
+INDUSTRY_UNWANTED_EXCLUSIONS = {
+    "healthcare":           ["care", "clinical", "medical"],
+    "medical_technology":   ["care", "clinical", "medical"],
+    "clean_technology":     ["technology", "tech"],
+    "education_technology": ["technology", "tech"],
+    "accounting":           ["finance", "financial"],
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# Persona titles per industry (used as Apollo title-search seed)
+# Keyed by normalized industry name. Unknown industries fall back to DEFAULT.
+# ────────────────────────────────────────────────────────────────────────────
+
+INDUSTRY_PERSONA_MAP = {
+    "government": [
+        "Chief Administrative Officer",
+        "City Manager",
+        "Deputy City Manager",
+        "Director of Human Resources",
+    ],
+    "not_for_profit": [
+        "Board Chair",
+        "Board Director",
+        "President",
+        "Executive Director",
+        "VP of People & Culture",
+    ],
+    "clean_technology": [
+        "Founder",
+        "Co-Founder",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Chief Technology Officer",
+    ],
+    "engineering_construction": [
+        "Founder",
+        "Co-Founder",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Chief Technology Officer",
+    ],
+    "healthcare": [
+        "Hospital Administrator",
+        "Chief Medical Officer",
+        "VP of Operations",
+        "VP of Talent Acquisition",
+    ],
+    "medical_technology": [
+        "Hospital Administrator",
+        "Chief Medical Officer",
+        "VP of Operations",
+        "VP of Talent Acquisition",
+    ],
+    "education": [
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "VP of HR",
+        "Chief Human Resources Officer",
+        "Director of Talent Acquisition",
+    ],
+    "education_technology": [
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "VP of HR",
+        "Director of Talent Acquisition",
+    ],
+    "legal": [
+        "Managing Partner",
+        "Chief Operating Officer",
+        "Director of Human Resources",
+    ],
+    "accounting": [
+        "Managing Partner",
+        "Chief Executive Officer",
+        "Chief Operating Officer",
+        "Director of Human Resources",
+    ],
+    "mining_resources": [
+        "VP of Operations",
+        "VP of Talent Acquisition",
+        "Chief Operating Officer",
+        "Director of Human Resources",
+    ],
+}
+
+# Fallback persona titles when company industry is outside the map above
+DEFAULT_PERSONA_TITLES = [
+    "Chief Executive Officer",
+    "Chief Operating Officer",
+    "Chief Human Resources Officer",
+    "VP of HR",
+    "VP People & Culture",
+    "Director of Talent Acquisition",
 ]
+
+
+def normalize_industry_name(name: str) -> str:
+    """Normalize an industry display name to a lookup key (lowercase, underscores)."""
+    if not name:
+        return ""
+    return name.lower().strip().replace("&", "and").replace("-", " ").replace("/", " ").replace(",", " ").replace("  ", " ").replace(" ", "_")
+
+
+def get_persona_titles(industry_name: str | None) -> list[str]:
+    """Resolve an industry display name to persona titles, with fallback."""
+    if not industry_name:
+        return DEFAULT_PERSONA_TITLES
+    key = normalize_industry_name(industry_name)
+    return INDUSTRY_PERSONA_MAP.get(key, DEFAULT_PERSONA_TITLES)
+
 
 settings = Settings()

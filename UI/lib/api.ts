@@ -16,6 +16,8 @@ export interface RunStats {
 export interface RunConfig {
   searchTitles: string[]
   searchLocations: string[]
+  targetIndustries: string[]
+  customIndustries?: string[]
   hoursOld: number
   resultsPerSearch: number
   siteName: string[]
@@ -46,6 +48,10 @@ export interface RunJob {
   boardName: string
   externalId: string
   companyId: string | null
+  industry?: string
+  prospectCount?: number
+  outreachCount?: number
+  postedDate?: string
   qualityStatus: "excellent" | "good" | "fair" | "poor"
   rejectionReason: string | null
   jobDetails: {
@@ -58,6 +64,36 @@ export interface RunJob {
   }
   createdAt: string
   updatedAt: string
+}
+
+export interface JobProspect {
+  _id: string
+  runId?: string
+  companyId?: string
+  firstName: string
+  lastName: string
+  email?: string
+  title?: string
+  seniority?: string
+  industryName?: string
+  isEnriched: boolean
+  isAccepted: boolean
+  matchReasons?: string[]
+  rejectionReason?: string | null
+  prospectDetails?: {
+    linkedinUrl?: string
+    phone?: string
+    location?: string
+  }
+}
+
+export interface EnrichmentCreditStatus {
+  creditsUsed: number
+  dailyLimit: number
+  creditsRemaining: number
+  perJobLimit: number
+  jobCredits: Record<string, number>
+  periodEnd: string
 }
 
 export interface AllJobsResponse {
@@ -147,6 +183,53 @@ export async function fetchRunJobs(
 }
 
 // ── All Jobs ─────────────────────────────────────────────────────────────
+
+export async function fetchJobProspects(
+  jobId: string
+): Promise<{ prospects: JobProspect[]; emailTemplate: any }> {
+  const res = await fetch(`${API_BASE}/api/v1/jobs/${jobId}/prospects`)
+  if (!res.ok) throw new Error("Failed to fetch prospects")
+  return res.json()
+}
+
+export async function fetchEnrichmentCredits(
+  runId: string
+): Promise<EnrichmentCreditStatus> {
+  const res = await fetch(`${API_BASE}/api/v1/runs/${runId}/enrichment-credits`)
+  if (!res.ok) throw new Error("Failed to fetch credits")
+  return res.json()
+}
+
+export async function fetchOutreachStatus(runId: string): Promise<{ records: any[] }> {
+  const res = await fetch(`${API_BASE}/api/v1/runs/${runId}/outreach-status`)
+  if (!res.ok) throw new Error("Failed to fetch outreach status")
+  return res.json()
+}
+
+export async function triggerEmailFlow(
+  runId: string,
+  jobsPayload: { jobId: string; prospects: any[] }[]
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/runs/${runId}/trigger-email-flow`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jobs: jobsPayload }),
+  })
+  if (!res.ok) throw new Error("Failed to trigger email flow")
+  return res.json()
+}
+
+export async function enrichProspects(
+  prospectIds: string[],
+  runId: string,
+  jobId?: string
+): Promise<{ message?: string; skippedNoCredit?: number }> {
+  // Stub — enrichment not enabled in this iteration.
+  return {
+    message: "Enrichment is not enabled in this iteration",
+    skippedNoCredit: prospectIds.length,
+  }
+}
 
 export async function fetchAllJobs(
   page = 1,

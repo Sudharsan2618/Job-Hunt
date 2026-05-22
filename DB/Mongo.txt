@@ -1,3 +1,44 @@
+// ============================================================================
+// PHASE 2 / PHASE 3 ADDITIONS  (informational — run collMod manually)
+// ============================================================================
+// New fields written by the orchestrator. These are NOT yet in the $jsonSchema
+// validators below; relax them or drop validation on these collections before
+// running Phase 2/3 against a strict schema.
+//
+// companies:
+//   linkedinSlug      string   — parsed from LinkedIn company URL
+//   companyIndustry   string   — LLM-classified plain-text industry
+//   matchedIndustry   string   — which user-target industry it matched (or null)
+//   targeted          bool     — true when matched AND staffCount < MAX_STAFF_COUNT
+//   staffCount        int      — from LLM
+//   website           string
+//
+// prospects:
+//   runId             ObjectId — owning run
+//   apolloId          string   — Apollo person id (de-dup key with runId+companyId)
+//   seniority         string   — Apollo seniority bucket
+//   industryName      string   — matched industry at the time of scrape
+//   isEnriched        bool     — false until on-demand enrichment is run
+//   isAccepted        bool     — passed Apollo filters? rejected rows are also stored
+//   matchReasons      array<string>
+//   rejectionReason   string
+//   email             string   — may be empty pre-enrichment; relax email regex:
+//
+//     db.runCommand({
+//       collMod: "prospects",
+//       validator: { $jsonSchema: {
+//         bsonType: "object",
+//         required: ["_id", "firstName", "lastName"],
+//         properties: { email: { bsonType: ["string","null"] } }
+//       }},
+//       validationLevel: "moderate"
+//     })
+//
+// icpConfig.industries:
+//   description       string   — freshly added industries may carry an LLM-hint description
+//
+// ============================================================================
+
 /**
  * MongoDB Collections Setup Script
  * 

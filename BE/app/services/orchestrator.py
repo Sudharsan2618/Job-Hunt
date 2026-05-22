@@ -1,69 +1,65 @@
 """
 Pipeline Orchestrator
 Background task entry-point that coordinates:
-  Phase 1: Job scraping + title rejection + dedup + store  (jobspy_service)
+  Phase 1: Job scraping + title rejection + dedup + store          (jobspy_service / naukri_service)
+  Phase 2: OpenAI company industry resolution on accepted jobs     (openai_company_service)
+  Phase 3: Apollo prospect search (no enrichment) for targeted cos (apollo_service)
 """
-
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
+import logging
 
 from bson import ObjectId
 
 from app.database import get_collection
+from app.config import settings
 from app.services.jobspy_service import scrape_and_store_jobs
 from app.services.naukri_service import scrape_and_store_naukri_jobs
+from app.services.openai_company_service import OpenAICompanyService
+from app.services.apollo_service import ApolloService
+
+logger = logging.getLogger(__name__)
 
 
 async def process_run_background(run_id: str, run_config: Dict[str, Any]):
-    """
-    Background task called by POST /runs/start.
-
-    Phase 1 — scrape + title-reject + dedup + store jobs
-    """
+    """Background task called by POST /runs/start."""
     print(f"[Orchestrator] Starting run {run_id}")
 
     runs_col = await get_collection("runs")
     jobs_col = await get_collection("jobs")
+    companies_col = await get_collection("companies")
+    prospects_col = await get_collection("prospects")
 
     try:
         run_oid = ObjectId(run_id)
         now = datetime.utcnow()
 
-        # Mark run active
         await runs_col.update_one(
             {"_id": run_oid},
             {"$set": {"status": "active", "updatedAt": now}},
         )
 
-        # Get run document to check the source
         run_doc = await runs_col.find_one({"_id": run_oid})
         source = run_doc.get("source", "jobspy") if run_doc else "jobspy"
 
         site_names = run_config.get("siteName", [])
-        
-        # Check what we need to run based on siteName
         run_jobspy = "linkedin" in site_names
         run_naukri = "naukri" in site_names
-
-        # Fallback if site_names is empty or doesn't match either
         if not run_jobspy and not run_naukri:
             if source in ["naukri", "mixed"]:
                 run_naukri = True
             if source in ["jobspy", "mixed"]:
                 run_jobspy = True
 
-        total_scraped = 0
-        total_inserted = 0
-        total_duplicates = 0
-        total_accepted = 0
-        total_rejected = 0
+        # ──────────────────────────────────────────────────────────────
+        # Phase 1 — scrape + title-reject + dedup + store
+        # ──────────────────────────────────────────────────────────────
+        total_scraped = total_inserted = total_duplicates = 0
+        total_accepted = total_rejected = 0
 
-        # Phase 1a: Jobspy scrape (Linkedin)
         if run_jobspy:
-            # Create a localized config copy for Jobspy with only LinkedIn
             jobspy_config = run_config.copy()
             jobspy_config["siteName"] = ["linkedin"]
-            
             print(f"[Orchestrator] Running JobSpy scraper for: {jobspy_config['siteName']}")
             js_stats = await scrape_and_store_jobs(run_oid, jobspy_config, jobs_col)
             total_scraped += js_stats.get("total_scraped", 0)
@@ -72,22 +68,6 @@ async def process_run_background(run_id: str, run_config: Dict[str, Any]):
             total_accepted += js_stats.get("accepted", 0)
             total_rejected += js_stats.get("rejected", 0)
 
-            # Update stats intermediate to let UI know progress
-            await runs_col.update_one(
-                {"_id": run_oid},
-                {
-                    "$set": {
-                        "stats.totalJobsScraped": total_scraped,
-                        "stats.inserted": total_inserted,
-                        "stats.duplicates": total_duplicates,
-                        "stats.acceptedJobs": total_accepted,
-                        "stats.rejectedJobs": total_rejected,
-                        "updatedAt": datetime.utcnow(),
-                    }
-                },
-            )
-
-        # Phase 1b: Naukri scrape
         if run_naukri:
             print("[Orchestrator] Running Naukri scraper")
             nk_stats = await scrape_and_store_naukri_jobs(run_oid, run_config, jobs_col)
@@ -97,28 +77,48 @@ async def process_run_background(run_id: str, run_config: Dict[str, Any]):
             total_accepted += nk_stats.get("accepted", 0)
             total_rejected += nk_stats.get("rejected", 0)
 
-        phase1_stats = {
-            "total_scraped": total_scraped,
-            "inserted": total_inserted,
-            "duplicates": total_duplicates,
-            "accepted": total_accepted,
-            "rejected": total_rejected
-        }
-
         await runs_col.update_one(
             {"_id": run_oid},
             {
                 "$set": {
-                    "stats.totalJobsScraped": phase1_stats["total_scraped"],
-                    "stats.inserted": phase1_stats["inserted"],
-                    "stats.duplicates": phase1_stats["duplicates"],
-                    "stats.acceptedJobs": phase1_stats["accepted"],
-                    "stats.rejectedJobs": phase1_stats["rejected"],
+                    "stats.totalJobsScraped": total_scraped,
+                    "stats.inserted": total_inserted,
+                    "stats.duplicates": total_duplicates,
+                    "stats.acceptedJobs": total_accepted,
+                    "stats.rejectedJobs": total_rejected,
                     "updatedAt": datetime.utcnow(),
                 }
             },
         )
-        print(f"[Orchestrator] Phase 1 done — {phase1_stats}")
+        print(f"[Orchestrator] Phase 1 done — scraped={total_scraped} accepted={total_accepted}")
+
+        # ──────────────────────────────────────────────────────────────
+        # Phase 2 — OpenAI company industry resolution
+        # ──────────────────────────────────────────────────────────────
+        target_industries: List[str] = list(run_config.get("targetIndustries") or [])
+        custom_industries: List[str] = list(run_config.get("customIndustries") or [])
+        # Merge user-added industries (treat both lists as the same target pool)
+        all_target_industries = list({*(target_industries), *(custom_industries)})
+
+        phase2_stats = await _run_phase2(
+            run_oid=run_oid,
+            target_industries=all_target_industries,
+            jobs_col=jobs_col,
+            companies_col=companies_col,
+            runs_col=runs_col,
+        )
+        print(f"[Orchestrator] Phase 2 done — {phase2_stats}")
+
+        # ──────────────────────────────────────────────────────────────
+        # Phase 3 — Apollo prospect search for targeted companies
+        # ──────────────────────────────────────────────────────────────
+        phase3_stats = await _run_phase3(
+            run_oid=run_oid,
+            companies_col=companies_col,
+            prospects_col=prospects_col,
+            runs_col=runs_col,
+        )
+        print(f"[Orchestrator] Phase 3 done — {phase3_stats}")
 
         await runs_col.update_one(
             {"_id": run_oid},
@@ -147,3 +147,215 @@ async def process_run_background(run_id: str, run_config: Dict[str, Any]):
             },
         )
         raise
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 2 — Company industry resolution via OpenAI
+# ──────────────────────────────────────────────────────────────────────────
+
+async def _run_phase2(
+    *,
+    run_oid: ObjectId,
+    target_industries: List[str],
+    jobs_col,
+    companies_col,
+    runs_col,
+) -> Dict[str, int]:
+    stats = {"uniqueCompanies": 0, "acceptedCompanies": 0, "rejectedCompanies": 0, "skippedCompanies": 0}
+
+    if not settings.OPENAI_API_KEY:
+        print("[Phase2] OPENAI_API_KEY not set — skipping Phase 2")
+        return stats
+    if not target_industries:
+        print("[Phase2] No target industries provided — skipping Phase 2")
+        return stats
+
+    try:
+        svc = OpenAICompanyService(api_key=settings.OPENAI_API_KEY)
+    except Exception as e:
+        logger.error("[Phase2] Failed to init OpenAI client: %s", e)
+        return stats
+
+    # Group accepted jobs by their LinkedIn companyUrl
+    cursor = jobs_col.find(
+        {"runId": run_oid, "qualityStatus": "good"},
+        {"_id": 1, "jobDetails.companyUrl": 1, "company": 1},
+    )
+    url_to_job_ids: Dict[str, list] = {}
+    name_lookup: Dict[str, str] = {}
+    async for j in cursor:
+        url = (j.get("jobDetails") or {}).get("companyUrl") or ""
+        if not url:
+            continue
+        url_to_job_ids.setdefault(url, []).append(j["_id"])
+        name_lookup[url] = j.get("company") or name_lookup.get(url, "")
+
+    stats["uniqueCompanies"] = len(url_to_job_ids)
+    print(f"[Phase2] {len(url_to_job_ids)} unique company URLs to resolve")
+
+    for url, job_ids in url_to_job_ids.items():
+        try:
+            info = svc.fetch_company_info(
+                url, target_industries=target_industries, max_staff_count=settings.MAX_STAFF_COUNT
+            )
+        except Exception as e:
+            logger.error("[Phase2] OpenAI failed for %s: %s", url, e)
+            info = None
+
+        if not info:
+            stats["skippedCompanies"] += 1
+            continue
+
+        slug = OpenAICompanyService.get_slug(url)
+        domain = info.get("companyDomain") or ""
+        targeted = bool(info.get("targeted"))
+
+        # Choose upsert key: linkedinSlug if available, else domain
+        upsert_query = {"linkedinSlug": slug} if slug else ({"companyDomain": domain} if domain else None)
+        if upsert_query is None:
+            stats["skippedCompanies"] += 1
+            continue
+
+        payload = {
+            "companyName": info.get("companyName") or name_lookup.get(url) or "",
+            "companyDomain": domain,
+            "linkedinSlug": slug,
+            "companyIndustry": info.get("companyIndustry") or "",
+            "industry": info.get("companyIndustry") or "",
+            "matchedIndustry": info.get("matchedIndustry"),
+            "targeted": targeted,
+            "staffCount": info.get("staffCount") or 0,
+            "employeeCount": info.get("staffCount") or 0,
+            "website": info.get("website") or "",
+            "isEligible": targeted,
+        }
+        now = datetime.utcnow()
+        await companies_col.update_one(
+            upsert_query,
+            {"$set": {**payload, "updatedAt": now}, "$setOnInsert": {"createdAt": now}},
+            upsert=True,
+        )
+        company_doc = await companies_col.find_one(upsert_query, {"_id": 1})
+        company_oid = company_doc["_id"] if company_doc else None
+
+        # Link all matching jobs
+        if company_oid:
+            await jobs_col.update_many(
+                {"_id": {"$in": job_ids}},
+                {"$set": {"companyId": company_oid, "industry": info.get("companyIndustry") or ""}},
+            )
+
+        if targeted:
+            stats["acceptedCompanies"] += 1
+        else:
+            stats["rejectedCompanies"] += 1
+
+    await runs_col.update_one(
+        {"_id": run_oid},
+        {"$set": {
+            "stats.uniqueCompanies": stats["uniqueCompanies"],
+            "stats.acceptedCompanies": stats["acceptedCompanies"],
+            "stats.rejectedCompanies": stats["rejectedCompanies"],
+            "stats.skippedCompanies": stats["skippedCompanies"],
+            "updatedAt": datetime.utcnow(),
+        }},
+    )
+    return stats
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 3 — Apollo prospect search
+# ──────────────────────────────────────────────────────────────────────────
+
+async def _run_phase3(
+    *,
+    run_oid: ObjectId,
+    companies_col,
+    prospects_col,
+    runs_col,
+) -> Dict[str, int]:
+    stats = {"totalProspects": 0, "companiesProcessed": 0}
+
+    if not settings.APOLLO_API_KEY:
+        print("[Phase3] APOLLO_API_KEY not set — skipping Phase 3")
+        return stats
+
+    apollo = ApolloService()
+
+    cursor = companies_col.find(
+        {"targeted": True},
+        {"_id": 1, "companyDomain": 1, "matchedIndustry": 1, "companyName": 1},
+    )
+    targeted = []
+    async for c in cursor:
+        if c.get("companyDomain"):
+            targeted.append(c)
+
+    print(f"[Phase3] {len(targeted)} targeted companies for Apollo search")
+
+    for c in targeted:
+        domain = c["companyDomain"]
+        industry_name = c.get("matchedIndustry") or ""
+        try:
+            result = apollo.find_prospects(domain, industry_name, enrich=False)
+        except Exception as e:
+            logger.error("[Phase3] Apollo failed for %s: %s", domain, e)
+            continue
+
+        accepted = result.get("accepted", [])
+        rejected = result.get("rejected", [])
+        stats["companiesProcessed"] += 1
+
+        for p in accepted + rejected:
+            is_accepted = p in accepted
+            doc = _build_prospect_doc(
+                p, run_oid=run_oid, company_oid=c["_id"],
+                industry_name=industry_name, is_accepted=is_accepted,
+            )
+            if not doc:
+                continue
+            await prospects_col.update_one(
+                {"runId": run_oid, "companyId": c["_id"], "apolloId": doc["apolloId"]},
+                {"$set": doc, "$setOnInsert": {"createdAt": datetime.utcnow()}},
+                upsert=True,
+            )
+            if is_accepted:
+                stats["totalProspects"] += 1
+
+    await runs_col.update_one(
+        {"_id": run_oid},
+        {"$set": {"stats.totalProspects": stats["totalProspects"], "updatedAt": datetime.utcnow()}},
+    )
+    return stats
+
+
+def _build_prospect_doc(p: dict, *, run_oid, company_oid, industry_name: str, is_accepted: bool) -> dict | None:
+    apollo_id = p.get("id") or ""
+    if not apollo_id:
+        return None
+    name = (p.get("name") or "").strip()
+    first = (p.get("first_name") or (name.split(" ")[0] if name else "")).strip() or "Unknown"
+    last_parts = (p.get("last_name") or " ".join(name.split(" ")[1:])).strip()
+    last = last_parts or "—"
+    email = (p.get("email") or "").strip()
+    return {
+        "runId": run_oid,
+        "companyId": company_oid,
+        "apolloId": apollo_id,
+        "firstName": first,
+        "lastName": last,
+        "email": email,
+        "title": p.get("title") or "",
+        "seniority": p.get("seniority") or "",
+        "industryName": industry_name,
+        "isEnriched": False,
+        "isAccepted": is_accepted,
+        "matchReasons": list(p.get("_match_reasons") or []),
+        "rejectionReason": p.get("_rejection_reason"),
+        "prospectDetails": {
+            "linkedinUrl": p.get("linkedin_url") or "",
+            "phone": (p.get("phone_numbers") or [{}])[0].get("raw_number") if p.get("phone_numbers") else "",
+            "location": p.get("city") or p.get("state") or p.get("country") or "",
+        },
+        "updatedAt": datetime.utcnow(),
+    }

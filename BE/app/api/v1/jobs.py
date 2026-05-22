@@ -77,3 +77,31 @@ async def list_jobs(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching jobs: {str(e)}")
+
+
+# ── GET /{job_id}/prospects ────────────────────────────────────────────
+@router.get("/{job_id}/prospects")
+async def get_job_prospects(job_id: str, db=Depends(get_db)):
+    """Return prospects linked to the job's company. emailTemplate is stubbed."""
+    try:
+        job_oid = ObjectId(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    job = await db["jobs"].find_one({"_id": job_oid}, {"companyId": 1})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    company_id = job.get("companyId")
+    prospects: list = []
+    if company_id:
+        cursor = db["prospects"].find({"companyId": company_id})
+        async for p in cursor:
+            p["_id"] = str(p["_id"])
+            if p.get("runId"):
+                p["runId"] = str(p["runId"])
+            if p.get("companyId"):
+                p["companyId"] = str(p["companyId"])
+            prospects.append(p)
+
+    return {"prospects": prospects, "emailTemplate": None}

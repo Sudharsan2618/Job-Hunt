@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from app.database import get_database
 from app.schemas.runs import RunCreateSchema, RunResponseSchema
 from app.services.orchestrator import process_run_background
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
 router = APIRouter()
@@ -28,6 +28,8 @@ async def start_run(
     db=Depends(get_db),
 ):
     try:
+        if not request.runConfig.targetIndustries:
+            raise HTTPException(status_code=400, detail="targetIndustries must contain at least one industry")
         runs_col = db["runs"]
         run_doc = {
             "title": request.title,
@@ -57,6 +59,8 @@ async def start_run(
         run_doc["_id"] = run_id
         return RunResponseSchema(**run_doc)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error starting run: {str(e)}")
 
@@ -128,12 +132,26 @@ async def get_run_jobs(
         
         cursor = jobs_col.find(query).sort(sort_by, sort_direction).skip(skip).limit(limit)
 
+        prospects_col = db["prospects"]
+
         jobs = []
+        company_ids_seen: dict = {}
         async for doc in cursor:
             doc["_id"] = str(doc["_id"])
             doc["runId"] = str(doc["runId"])
-            if doc.get("companyId"):
-                doc["companyId"] = str(doc["companyId"])
+            company_oid = doc.get("companyId")
+            if company_oid:
+                doc["companyId"] = str(company_oid)
+                # Count prospects per company (memoize)
+                if company_oid not in company_ids_seen:
+                    company_ids_seen[company_oid] = await prospects_col.count_documents(
+                        {"companyId": company_oid, "isAccepted": True}
+                    )
+                doc["prospectCount"] = company_ids_seen[company_oid]
+            else:
+                doc["prospectCount"] = 0
+            doc["industry"] = doc.get("industry") or ""
+            doc["outreachCount"] = 0
             jobs.append(doc)
 
         return {
@@ -174,3 +192,31 @@ async def delete_run(run_id: str, db=Depends(get_db)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting run: {str(e)}")
+
+
+# ── Stub endpoints used by the new run-results UI ───────────────────────
+
+@router.get("/{run_id}/enrichment-credits")
+async def get_enrichment_credits(run_id: str):
+    """Stub credit status — enrichment is out of scope this iteration."""
+    period_end = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return {
+        "creditsUsed": 0,
+        "dailyLimit": 100,
+        "creditsRemaining": 100,
+        "perJobLimit": 50,
+        "jobCredits": {},
+        "periodEnd": period_end.isoformat(),
+    }
+
+
+@router.get("/{run_id}/outreach-status")
+async def get_outreach_status(run_id: str):
+    return {"records": []}
+
+
+@router.post("/{run_id}/trigger-email-flow")
+async def trigger_email_flow(run_id: str):
+    return {"message": "Email outreach is not enabled in this iteration"}

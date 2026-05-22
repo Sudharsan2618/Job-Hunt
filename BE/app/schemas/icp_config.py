@@ -1,7 +1,7 @@
 """
 ICP Config Pydantic Schemas for API Request/Response
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -23,7 +23,22 @@ class IndustryConfigSchema(BaseModel):
     slug: str
     displayName: str
     isTarget: bool
-    linkedinNames: List[str]
+    linkedinNames: List[str] = Field(default_factory=list)
+    description: Optional[str] = None
+
+
+class AddIndustryRequest(BaseModel):
+    displayName: str
+    description: Optional[str] = None
+
+
+class AddTitleRequest(BaseModel):
+    title: str
+
+
+class AddLocationRequest(BaseModel):
+    location: str
+    country: Optional[str] = ""
 
 
 class PersonaMappingSchema(BaseModel):

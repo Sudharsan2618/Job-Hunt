@@ -22,6 +22,14 @@ class ICPConfigSnapshotSchema(BaseModel):
 class RunConfigSchema(BaseModel):
     searchTitles: List[str]
     searchLocations: List[str]
+    targetIndustries: List[str] = Field(
+        default_factory=list,
+        description="Industry display names selected for this run (passed to LLM)",
+    )
+    customIndustries: List[str] = Field(
+        default_factory=list,
+        description="Industry display names freshly added in the ICP screen for this run",
+    )
     hoursOld: int
     resultsPerSearch: int
     siteName: List[str]

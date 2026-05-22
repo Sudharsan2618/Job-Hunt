@@ -1,30 +1,21 @@
 "use client"
 
-import { useState, useEffect, useCallback, Fragment } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import {
-  Download,
+  ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  X,
-  Trash2,
-  Wand2,
-  Mail,
-  Phone,
-  Megaphone,
-  Bot,
-  Linkedin,
-  Calendar,
-  ChevronDown,
-  ChevronUp,
-  ChevronsUpDown,
-  ArrowUpAZ,
-  ArrowDownAZ,
-  Group,
   Loader2,
-  ArrowLeft,
+  Users,
+  Search,
+  Building2,
+  Activity,
+  ArrowUp,
+  ArrowDown,
+  ListFilter,
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
@@ -34,349 +25,251 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { workflowAgents } from "@/lib/dummy-data"
-import type { WorkflowAgent } from "@/lib/types"
-import { fetchRunJobs, type RunJob } from "@/lib/api"
-import { CheckSquare } from "lucide-react"
+  fetchRun,
+  fetchRunJobs,
+  fetchEnrichmentCredits,
+  type Run,
+  type RunJob,
+  type RunJobsResponse,
+  type EnrichmentCreditStatus,
+} from "@/lib/api"
+import { JobProspectsPanel } from "./job-prospects-panel"
+import { OutreachStatusPanel } from "./outreach-status-panel"
 
 interface RunResultsContentProps {
   runId: string
 }
 
-const workflowIconMap = {
-  mail: Mail,
-  phone: Phone,
-  megaphone: Megaphone,
-  bot: Bot,
-  linkedin: Linkedin,
-  calendar: Calendar,
-}
-
-type SortMode = "none" | "asc" | "desc" | "grouped"
-
-interface ColumnSort {
-  field: string
-  mode: SortMode
-}
-
-const SORTABLE_COLUMNS = ["title", "company", "location", "qualityStatus", "boardName"]
+type JobFilter = "all" | "good" | "poor"
 
 export function RunResultsContent({ runId }: RunResultsContentProps) {
   const router = useRouter()
-  const [jobs, setJobs] = useState<RunJob[]>([])
-  const [displayJobs, setDisplayJobs] = useState<RunJob[]>([])
-  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set())
-  const [rowsPerPage, setRowsPerPage] = useState(50)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [totalResults, setTotalResults] = useState(0)
-  const [totalPages, setTotalPages] = useState(1)
+  const [run, setRun] = useState<Run | null>(null)
+  const [jobsResp, setJobsResp] = useState<RunJobsResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [jobPage, setJobPage] = useState(1)
+  const [jobFilter, setJobFilter] = useState<JobFilter>("all")
+  const [rowsPerPage, setRowsPerPage] = useState(50)
+  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set())
 
-  const [columnSort, setColumnSort] = useState<ColumnSort>({ field: "createdAt", mode: "desc" })
-  const [showWorkflowDialog, setShowWorkflowDialog] = useState(false)
-  const [selectedWorkflowAgent, setSelectedWorkflowAgent] = useState<WorkflowAgent | null>(null)
+  const [prospectsPanelOpen, setProspectsPanelOpen] = useState(false)
+  const [selectedJobForProspects, setSelectedJobForProspects] = useState<{
+    id: string
+    title: string
+    company: string
+  } | null>(null)
+
+  const [outreachStatusOpen, setOutreachStatusOpen] = useState(false)
+  const [creditStatus, setCreditStatus] = useState<EnrichmentCreditStatus | null>(null)
+
+  const [sortField, setSortField] = useState<string | null>(null)
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc" | "group">("asc")
+
+  const loadRun = useCallback(async () => {
+    try {
+      setRun(await fetchRun(runId))
+    } catch (e) {
+      console.error(e)
+    }
+  }, [runId])
 
   const loadJobs = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
-      let sortBy: string | undefined
-      let sortOrder: string | undefined
+      const quality = jobFilter === "all" ? undefined : jobFilter
+      setJobsResp(await fetchRunJobs(runId, jobPage, rowsPerPage, quality))
+    } catch (e) {
+      console.error(e)
+    }
+  }, [runId, jobPage, jobFilter, rowsPerPage])
 
-      if (columnSort.mode === "asc") {
-        sortBy = columnSort.field
-        sortOrder = "asc"
-      } else if (columnSort.mode === "desc") {
-        sortBy = columnSort.field
-        sortOrder = "desc"
-      } else if (columnSort.mode === "grouped") {
-        sortBy = columnSort.field
-        sortOrder = "asc"
-      } else {
-        sortBy = "createdAt"
-        sortOrder = "desc"
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([loadRun(), loadJobs()]).finally(() => setLoading(false))
+  }, [loadRun, loadJobs])
+
+  useEffect(() => {
+    fetchEnrichmentCredits(runId)
+      .then(setCreditStatus)
+      .catch((e) => console.error("credits:", e))
+  }, [runId])
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      if (sortOrder === "asc") setSortOrder("desc")
+      else if (sortOrder === "desc") setSortOrder("group")
+      else {
+        setSortField(null)
+        setSortOrder("asc")
       }
-
-      const data = await fetchRunJobs(runId, currentPage, rowsPerPage, undefined, sortBy, sortOrder)
-      setJobs(data.jobs)
-      setTotalResults(data.total)
-      setTotalPages(data.pages)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load jobs")
-    } finally {
-      setLoading(false)
-    }
-  }, [runId, currentPage, rowsPerPage, columnSort])
-
-  useEffect(() => {
-    loadJobs()
-  }, [loadJobs])
-
-  useEffect(() => {
-    if (columnSort.mode === "grouped" && jobs.length > 0) {
-      const field = columnSort.field as keyof RunJob
-      const grouped = [...jobs].sort((a, b) => {
-        const aVal = (getJobFieldValue(a, field) || "").toString().toLowerCase()
-        const bVal = (getJobFieldValue(b, field) || "").toString().toLowerCase()
-        return aVal.localeCompare(bVal)
-      })
-      setDisplayJobs(grouped)
     } else {
-      setDisplayJobs(jobs)
-    }
-  }, [jobs, columnSort])
-
-  function getJobFieldValue(job: RunJob, field: string): string {
-    switch (field) {
-      case "title": return job.title || ""
-      case "company": return job.company || ""
-      case "location": return job.location || ""
-      case "qualityStatus": return job.qualityStatus || ""
-      case "boardName": return job.boardName || ""
-      default: return ""
+      setSortField(field)
+      setSortOrder("asc")
     }
   }
 
-  const handleExportCSV = () => {
-    const headers = ["Title", "Company", "Location", "Job Board", "Quality", "Posted Date", "Job URL", "Company URL"]
-    const csvRows = [headers.join(",")]
-    displayJobs.forEach((job) => {
-      csvRows.push([
-        `"${(job.title || "").replace(/"/g, '""')}"`,
-        `"${(job.company || "").replace(/"/g, '""')}"`,
-        `"${(job.location || "").replace(/"/g, '""')}"`,
-        `"${(job.boardName || "").replace(/"/g, '""')}"`,
-        `"${(job.qualityStatus || "").replace(/"/g, '""')}"`,
-        `"${job.createdAt || ""}"`,
-        `"${job.jobDetails?.jobUrl || ""}"`,
-        `"${job.jobDetails?.companyUrl || ""}"`,
-      ].join(","))
+  const getSortedJobs = (jobsList: RunJob[]) => {
+    if (!sortField) return jobsList
+    return [...jobsList].sort((a, b) => {
+      const get = (j: any) => (j[sortField] || "").toString().toLowerCase()
+      const va = get(a)
+      const vb = get(b)
+      if (sortOrder === "asc" || sortOrder === "group") return va > vb ? 1 : va < vb ? -1 : 0
+      return va < vb ? 1 : va > vb ? -1 : 0
     })
-    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `run-${runId}-jobs-export.csv`
-    a.click()
-    URL.revokeObjectURL(url)
   }
 
   const handleSelectJob = (jobId: string) => {
-    const newSelected = new Set(selectedJobs)
-    if (newSelected.has(jobId)) {
-      newSelected.delete(jobId)
-    } else {
-      newSelected.add(jobId)
-    }
-    setSelectedJobs(newSelected)
+    const next = new Set(selectedJobs)
+    if (next.has(jobId)) next.delete(jobId)
+    else next.add(jobId)
+    setSelectedJobs(next)
   }
-
   const handleSelectAll = () => {
-    if (selectedJobs.size === displayJobs.length) {
-      setSelectedJobs(new Set())
-    } else {
-      setSelectedJobs(new Set(displayJobs.map((j) => j._id)))
-    }
+    if (!jobsResp?.jobs?.length) return
+    if (selectedJobs.size === jobsResp.jobs.length) setSelectedJobs(new Set())
+    else setSelectedJobs(new Set(jobsResp.jobs.map((j) => j._id)))
   }
 
-  const handleClearSelection = () => {
-    setSelectedJobs(new Set())
+  const handleFindProspects = (job: RunJob) => {
+    setSelectedJobForProspects({ id: job._id, title: job.title, company: job.company })
+    setProspectsPanelOpen(true)
   }
 
-  const handleOpenWorkflowDialog = () => {
-    setShowWorkflowDialog(true)
+  const handleTriggerEmailFlow = () => {
+    alert("Email outreach is not enabled in this iteration.")
   }
 
-  const handleConfirmWorkflowAssignment = () => {
-    if (selectedWorkflowAgent) {
-      alert(
-        `Successfully assigned ${selectedJobs.size} job${selectedJobs.size > 1 ? "s" : ""} to ${selectedWorkflowAgent.name}!`
-      )
-      setShowWorkflowDialog(false)
-      setSelectedWorkflowAgent(null)
-      setSelectedJobs(new Set())
-    }
-  }
-
-  const handleColumnSort = (field: string) => {
-    setColumnSort((prev) => {
-      if (prev.field !== field) {
-        return { field, mode: "asc" }
-      }
-      const nextMode: Record<SortMode, SortMode> = {
-        none: "asc",
-        asc: "desc",
-        desc: "grouped",
-        grouped: "none",
-      }
-      return { field, mode: nextMode[prev.mode] }
-    })
-    setCurrentPage(1)
-  }
-
-  const handleDirectSort = (field: string, mode: SortMode) => {
-    setColumnSort({ field, mode })
-    setCurrentPage(1)
-  }
-
-  const getQualityColor = (quality: string) => {
-    switch (quality) {
-      case "excellent":
-        return "bg-emerald-50 text-emerald-700 border border-emerald-200"
-      case "good":
-        return "bg-blue-50 text-blue-700 border border-blue-200"
-      case "fair":
-        return "bg-amber-50 text-amber-700 border border-amber-200"
-      case "poor":
-        return "bg-red-50 text-red-600 border border-red-200"
-      default:
-        return "bg-slate-50 text-slate-600 border border-slate-200"
-    }
-  }
-
-  const formatDate = (dateStr: string) => {
+  const formatDate = (dateStr?: string) => {
     if (!dateStr) return "—"
     try {
-      const date = new Date(dateStr)
-      return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      const d = new Date(dateStr)
+      if (isNaN(d.getTime())) return dateStr
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
     } catch {
       return dateStr
     }
   }
 
-  const getSortIndicator = (field: string) => {
-    if (columnSort.field !== field || columnSort.mode === "none") {
-      return <ChevronsUpDown className="w-3 h-3 text-[#b0b3c0]" />
-    }
-    switch (columnSort.mode) {
-      case "asc":
-        return <ChevronUp className="w-3 h-3 text-[#004bca]" />
-      case "desc":
-        return <ChevronDown className="w-3 h-3 text-[#004bca]" />
-      case "grouped":
-        return <Group className="w-3 h-3 text-[#004bca]" />
-      default:
-        return <ChevronsUpDown className="w-3 h-3 text-[#b0b3c0]" />
-    }
-  }
-
-  const renderSortableHeader = (label: string, field: string, extraClass = "") => {
-    const isSortable = SORTABLE_COLUMNS.includes(field)
-    if (!isSortable) {
-      return (
-        <th className={`px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider ${extraClass}`}>
-          {label}
-        </th>
-      )
-    }
-
+  if (loading && !run) {
     return (
-      <th className={`px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider ${extraClass}`}>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-1 hover:text-[#004bca] transition-colors focus:outline-none group">
-              <span>{label}</span>
-              {getSortIndicator(field)}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[160px]">
-            <DropdownMenuItem
-              onClick={() => handleDirectSort(field, "asc")}
-              className={`flex items-center gap-2 text-xs ${columnSort.field === field && columnSort.mode === "asc" ? "bg-[#004bca]/5 text-[#004bca] font-bold" : ""}`}
-            >
-              <ArrowUpAZ className="w-3.5 h-3.5" />
-              Sort A → Z
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => handleDirectSort(field, "desc")}
-              className={`flex items-center gap-2 text-xs ${columnSort.field === field && columnSort.mode === "desc" ? "bg-[#004bca]/5 text-[#004bca] font-bold" : ""}`}
-            >
-              <ArrowDownAZ className="w-3.5 h-3.5" />
-              Sort Z → A
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => handleDirectSort(field, "grouped")}
-              className={`flex items-center gap-2 text-xs ${columnSort.field === field && columnSort.mode === "grouped" ? "bg-[#004bca]/5 text-[#004bca] font-bold" : ""}`}
-            >
-              <Group className="w-3.5 h-3.5" />
-              Word Grouping
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </th>
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="w-6 h-6 animate-spin text-[#0061ff]" />
+      </div>
     )
   }
 
-  const startRow = (currentPage - 1) * rowsPerPage + 1
-  const endRow = Math.min(currentPage * rowsPerPage, totalResults)
+  const allJobs = jobsResp?.jobs ?? []
+  const jobs = getSortedJobs(allJobs)
+  const totalJobs = jobsResp?.total ?? 0
+  const totalPages = jobsResp?.pages ?? 1
+  const startRow = (jobPage - 1) * rowsPerPage + 1
+  const endRow = Math.min(jobPage * rowsPerPage, totalJobs)
 
-  const getGroupLabel = (job: RunJob, index: number): string | null => {
-    if (columnSort.mode !== "grouped") return null
-    const field = columnSort.field
-    const currentVal = getJobFieldValue(job, field).toLowerCase()
-    if (index === 0) return currentVal
-    const prevVal = getJobFieldValue(displayJobs[index - 1], field).toLowerCase()
-    if (currentVal !== prevVal) return currentVal
-    return null
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortField !== field) return null
+    if (sortOrder === "asc") return <ArrowUp className="w-3 h-3 ml-1 text-[#0061ff]" />
+    if (sortOrder === "desc") return <ArrowDown className="w-3 h-3 ml-1 text-[#0061ff]" />
+    return <ListFilter className="w-3 h-3 ml-1 text-[#0061ff]" />
   }
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
-      {/* ── Header Section ── */}
-      <header className="bg-white px-6 py-4 border-b border-[#e0e3e5]/25 flex flex-wrap justify-between items-center gap-4 shrink-0">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => router.push(`/runs/${runId}`)}
-            className="flex items-center gap-1.5 text-xs font-semibold text-[#565e74] hover:text-[#191c1e] bg-[#f2f4f6] px-3 py-1.5 rounded-lg transition-all"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Run
-          </button>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleExportCSV}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#e6e8ea] rounded-lg text-xs font-semibold text-[#191c1e] hover:bg-[#e0e3e5] transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" /> CSV
-          </button>
+      <header className="bg-white px-6 py-4 border-b border-[#e0e3e5]/20 shrink-0">
+        <button
+          onClick={() => router.push(`/runs/${runId}`)}
+          className="flex items-center gap-2 text-sm text-[#565e74] hover:text-[#191c1e] mb-3 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Run Details
+        </button>
+        <div className="flex flex-wrap justify-between items-center gap-4">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-bold text-[#191c1e]">{run?.title || "Run"} — Results</h1>
+            <p
+              className="text-xs text-[#737687] truncate"
+              title={`${run?.runConfig.searchTitles.join(", ")} · ${run?.runConfig.searchLocations.join(", ")}`}
+            >
+              {run?.runConfig.searchTitles.join(", ")} ·{" "}
+              {run?.runConfig.searchLocations.join(", ")}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {run && (
+              <Badge className="bg-blue-100 text-blue-700 border-0">{run.status}</Badge>
+            )}
+            {creditStatus && (() => {
+              const used = creditStatus.creditsUsed
+              const limit = creditStatus.dailyLimit
+              const pct = limit > 0 ? Math.round((used / limit) * 100) : 0
+              return (
+                <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg border shadow-sm text-xs font-bold bg-emerald-50 border-emerald-200 text-emerald-700">
+                  <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-emerald-500"
+                      style={{ width: `${Math.min(pct, 100)}%` }}
+                    />
+                  </div>
+                  <span>
+                    {used}/{limit} credits
+                  </span>
+                </div>
+              )
+            })()}
+            <button
+              onClick={handleTriggerEmailFlow}
+              className="px-4 py-2 bg-[#004bca] text-white text-xs font-bold rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+            >
+              <Users className="w-4 h-4" />
+              Trigger Email Flow
+            </button>
+            <button
+              onClick={() => setOutreachStatusOpen(true)}
+              className="px-4 py-2 bg-white border border-[#e0e3e5] text-[#191c1e] text-xs font-bold rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2"
+            >
+              <Activity className="w-4 h-4 text-[#0061ff]" />
+              Check Status
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* ── Results Table ── */}
+      <section className="bg-white px-6 py-3 border-b border-[#e0e3e5]/10 flex flex-wrap items-center gap-4 shrink-0">
+        <div className="flex gap-1 p-1 bg-[#f2f4f6] rounded-lg mr-4">
+          {(["all", "good", "poor"] as JobFilter[]).map((f) => (
+            <button
+              key={f}
+              onClick={() => {
+                setJobFilter(f)
+                setJobPage(1)
+              }}
+              className={`px-3 py-1 text-xs font-bold rounded transition-all ${
+                jobFilter === f
+                  ? "bg-white text-[#004bca] shadow-sm border border-[#c2c6d9]/10"
+                  : "text-[#737687] hover:text-[#191c1e]"
+              }`}
+            >
+              {f === "all" ? "All Jobs" : f === "good" ? "Accepted" : "Rejected"}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1" />
+        <div className="text-xs text-[#737687] font-medium">
+          <span className="font-bold text-[#191c1e]">{totalJobs}</span> total jobs
+        </div>
+      </section>
+
       <section className="flex-1 overflow-auto bg-white relative">
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="w-6 h-6 animate-spin text-[#004bca]" />
-            <span className="ml-2 text-sm text-[#737687]">Loading jobs...</span>
-          </div>
-        ) : error ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <p className="text-sm text-red-500 font-medium">{error}</p>
-              <button
-                onClick={loadJobs}
-                className="mt-2 text-xs text-[#004bca] font-bold hover:underline"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        ) : displayJobs.length === 0 ? (
-          <div className="flex items-center justify-center h-64">
-            <p className="text-sm text-[#737687]">No jobs found for this run.</p>
+        {jobs.length === 0 ? (
+          <div className="flex items-center justify-center py-24">
+            {loading ? (
+              <Loader2 className="w-5 h-5 animate-spin text-[#0061ff]" />
+            ) : (
+              <div className="text-center">
+                <Search className="w-10 h-10 text-[#94a3b8] mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-[#191c1e] mb-1">No jobs found</h3>
+                <p className="text-sm text-[#565e74]">No jobs match the current filter.</p>
+              </div>
+            )}
           </div>
         ) : (
           <table className="w-full border-collapse text-left">
@@ -384,304 +277,226 @@ export function RunResultsContent({ runId }: RunResultsContentProps) {
               <tr className="bg-slate-50 border-b border-[#c2c6d9]/20">
                 <th className="px-4 py-3 w-10">
                   <Checkbox
-                    checked={selectedJobs.size === displayJobs.length && displayJobs.length > 0}
+                    checked={selectedJobs.size === jobs.length && jobs.length > 0}
                     onCheckedChange={handleSelectAll}
                   />
                 </th>
-                {renderSortableHeader("Title", "title", "min-w-[220px]")}
-                {renderSortableHeader("Company", "company", "min-w-[160px]")}
-                {renderSortableHeader("Location", "location", "w-44")}
-                {renderSortableHeader("Job Board", "boardName", "w-28")}
-                {renderSortableHeader("Quality", "qualityStatus", "w-24")}
-                <th className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider w-28">
+                <th
+                  className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider min-w-[200px] cursor-pointer hover:bg-slate-100 transition-colors"
+                  onClick={() => handleSort("title")}
+                >
+                  <div className="flex items-center">
+                    Job Title
+                    <SortIcon field="title" />
+                  </div>
+                </th>
+                <th
+                  className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider min-w-[160px] cursor-pointer hover:bg-slate-100 transition-colors"
+                  onClick={() => handleSort("company")}
+                >
+                  <div className="flex items-center">
+                    Company
+                    <SortIcon field="company" />
+                  </div>
+                </th>
+                <th
+                  className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider min-w-[140px] cursor-pointer hover:bg-slate-100 transition-colors"
+                  onClick={() => handleSort("industry")}
+                >
+                  <div className="flex items-center">
+                    Industry
+                    <SortIcon field="industry" />
+                  </div>
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider w-32">
                   Posted Date
+                </th>
+                <th
+                  className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider w-40 cursor-pointer hover:bg-slate-100 transition-colors"
+                  onClick={() => handleSort("location")}
+                >
+                  <div className="flex items-center">
+                    Location
+                    <SortIcon field="location" />
+                  </div>
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider w-32">
+                  Outreach
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold text-[#737687] uppercase tracking-wider text-right w-36">
+                  Actions
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#c2c6d9]/10">
-              {displayJobs.map((job, index) => {
-                const groupLabel = getGroupLabel(job, index)
-                return (
-                  <Fragment key={job._id}>
-                    {groupLabel && columnSort.mode === "grouped" && index > 0 && (
-                      <tr key={`group-${index}`} className="bg-[#f7f8fa]">
-                        <td colSpan={7} className="px-4 py-1.5">
-                          <span className="text-[10px] font-bold text-[#004bca] uppercase tracking-wider">
-                            {groupLabel}
-                          </span>
-                        </td>
-                      </tr>
-                    )}
-                    <tr
-                      key={job._id + "-" + index}
-                      className={`hover:bg-[#004bca]/5 transition-colors group ${
-                        selectedJobs.has(job._id) ? "bg-[#004bca]/5" : ""
-                      }`}
+              {jobs.map((job) => (
+                <tr
+                  key={job._id}
+                  className={`hover:bg-[#004bca]/5 transition-colors group ${
+                    selectedJobs.has(job._id)
+                      ? "bg-[#004bca]/10"
+                      : job.qualityStatus === "good"
+                      ? "bg-emerald-50/40"
+                      : "bg-red-50/40"
+                  }`}
+                >
+                  <td className="px-4 py-2">
+                    <Checkbox
+                      checked={selectedJobs.has(job._id)}
+                      onCheckedChange={() => handleSelectJob(job._id)}
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <a
+                      href={job.jobDetails?.jobUrl || "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-bold text-[#004bca] text-xs truncate max-w-[200px] block hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                      title={job.title}
                     >
-                      <td className="px-4 py-2">
-                        <Checkbox
-                          checked={selectedJobs.has(job._id)}
-                          onCheckedChange={() => handleSelectJob(job._id)}
-                        />
-                      </td>
-                      <td className="px-4 py-2">
-                        {job.jobDetails?.jobUrl ? (
-                          <a
-                            href={job.jobDetails.jobUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-bold text-[#004bca] text-xs truncate max-w-[300px] block hover:underline"
-                            title={job.title}
-                          >
-                            {job.title}
-                          </a>
-                        ) : (
-                          <span className="font-bold text-[#191c1e] text-xs truncate max-w-[300px] block">
-                            {job.title}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2">
-                        {job.jobDetails?.companyUrl ? (
-                          <a
-                            href={job.jobDetails.companyUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-medium text-xs text-[#004bca] truncate max-w-[150px] block hover:underline"
-                            title={job.company}
-                          >
-                            {job.company}
-                          </a>
-                        ) : (
-                          <span className="font-medium text-xs text-[#191c1e] truncate max-w-[150px] block">
-                            {job.company}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2">
-                        <span className="bg-[#e6e8ea] px-2 py-0.5 rounded text-[10px] font-medium text-[#424656]">
-                          {job.location}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2">
-                        <span className="bg-[#dae2fd] text-[#3f465c] text-[10px] px-1.5 py-0.5 rounded font-bold capitalize">
-                          {job.boardName || "—"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2">
-                        <span
-                          className={`inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-bold capitalize ${getQualityColor(
-                            job.qualityStatus
-                          )}`}
-                        >
-                          {job.qualityStatus || "—"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 text-[10px] font-mono text-[#737687]">
-                        {formatDate(job.createdAt)}
-                      </td>
-                    </tr>
-                  </Fragment>
-                )
-              })}
+                      {job.title}
+                    </a>
+                  </td>
+                  <td className="px-4 py-2">
+                    <a
+                      href={job.jobDetails?.companyUrl || "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 hover:underline cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={job.company}
+                    >
+                      <div className="w-6 h-6 rounded-md bg-[#eceef0] flex items-center justify-center shrink-0">
+                        <Building2 className="w-3 h-3 text-[#424656]" />
+                      </div>
+                      <span className="font-medium text-xs truncate max-w-[100px] text-[#004bca]">
+                        {job.company}
+                      </span>
+                    </a>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className="text-[10px] text-[#565e74] font-bold uppercase tracking-wider">
+                      {job.industry || "—"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className="text-xs text-[#565e74] font-medium">
+                      {formatDate(job.postedDate || job.createdAt)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span
+                      className="inline-block bg-[#e6e8ea] px-2 py-0.5 rounded text-[10px] font-medium text-[#424656] max-w-[120px] truncate align-middle"
+                      title={job.location || "Unknown"}
+                    >
+                      {job.location || "Unknown"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    {job.outreachCount && job.outreachCount > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-bold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        {job.outreachCount} Sent
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-[#94a3b8] font-medium">Pending</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      onClick={() => handleFindProspects(job)}
+                      className="text-[10px] font-bold bg-[#004bca] text-white px-3 py-1.5 rounded-lg hover:opacity-90 transition-opacity inline-flex items-center gap-1.5"
+                    >
+                      <Users className="w-3 h-3" />
+                      {job.prospectCount !== undefined && job.prospectCount > 0
+                        ? `${job.prospectCount} Prospects`
+                        : "Prospects"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
       </section>
 
-      {/* ── Sticky Pagination Footer ── */}
-      <footer className="bg-white px-6 py-3 border-t border-[#e0e3e5]/20 flex justify-between items-center z-30">
-        <div className="flex items-center gap-4 text-[11px] font-medium text-[#737687]">
-          <span>Rows:</span>
-          <Select
-            value={rowsPerPage.toString()}
-            onValueChange={(v) => {
-              setRowsPerPage(Number(v))
-              setCurrentPage(1)
-            }}
-          >
-            <SelectTrigger className="w-14 h-6 text-[11px] bg-transparent border-none p-0 font-bold text-[#191c1e]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="25">25</SelectItem>
-              <SelectItem value="50">50</SelectItem>
-              <SelectItem value="100">100</SelectItem>
-            </SelectContent>
-          </Select>
-          <span className="ml-2 border-l border-[#c2c6d9]/30 pl-4">
-            {totalResults > 0 ? `${startRow}-${endRow} of ${totalResults.toLocaleString()} results` : "0 results"}
-          </span>
-        </div>
-        <div className="flex gap-1">
-          <button
-            className="p-1 rounded-lg hover:bg-[#e0e3e5] text-[#737687] disabled:opacity-30"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-            let pageNum: number
-            if (totalPages <= 5) {
-              pageNum = i + 1
-            } else if (currentPage <= 3) {
-              pageNum = i + 1
-            } else if (currentPage >= totalPages - 2) {
-              pageNum = totalPages - 4 + i
-            } else {
-              pageNum = currentPage - 2 + i
-            }
-            return (
-              <button
-                key={pageNum}
-                onClick={() => setCurrentPage(pageNum)}
-                className={`w-6 h-6 rounded-md text-[10px] font-bold transition-all ${
-                  currentPage === pageNum
-                    ? "bg-[#004bca] text-white shadow-sm"
-                    : "hover:bg-[#e0e3e5] text-[#737687]"
-                }`}
-              >
-                {pageNum}
-              </button>
-            )
-          })}
-          <button
-            className="p-1 rounded-lg hover:bg-[#e0e3e5] text-[#737687] disabled:opacity-30"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-      </footer>
-
-      {/* ── Floating Selection Action Bar ── */}
-      <div
-        className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-[60] transform transition-all duration-300 ${
-          selectedJobs.size > 0
-            ? "translate-y-0 opacity-100"
-            : "translate-y-20 opacity-0 pointer-events-none"
-        }`}
-      >
-        <div className="bg-slate-900 text-white rounded-full px-6 py-3 shadow-2xl flex items-center gap-6 border border-white/10">
-          <div className="flex items-center gap-3 pr-6 border-r border-white/20">
-            <span className="bg-[#004bca] px-2 py-0.5 rounded text-xs font-bold">
-              {selectedJobs.size}
-            </span>
-            <span className="text-xs font-medium">Items selected</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenWorkflowDialog}
-              className="flex items-center gap-2 bg-[#004bca] hover:bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-lg shadow-[#004bca]/20"
-            >
-              <Wand2 className="w-3.5 h-3.5" />
-              Configure to Workflow Agent
-            </button>
-            <button className="p-1.5 hover:bg-white/10 rounded-full transition-colors text-white/70 hover:text-white">
-              <Trash2 className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleClearSelection}
-              className="p-1.5 hover:bg-white/10 rounded-full transition-colors text-white/70 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Workflow Assignment Dialog ── */}
-      <Dialog open={showWorkflowDialog} onOpenChange={setShowWorkflowDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Wand2 className="w-5 h-5 text-[#004bca]" />
-              Assign to Workflow Agent
-            </DialogTitle>
-            <DialogDescription>
-              Assign {selectedJobs.size} selected job
-              {selectedJobs.size > 1 ? "s" : ""} to an AI workflow agent for automated
-              outreach.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-4">
-            <div className="bg-[#f2f4f6] rounded-lg p-3 mb-4 flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-[#004bca] flex items-center justify-center">
-                <CheckSquare className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-[#191c1e]">
-                  {selectedJobs.size} job{selectedJobs.size > 1 ? "s" : ""} selected
-                </p>
-                <p className="text-[10px] text-[#737687]">
-                  Ready for workflow assignment
-                </p>
-              </div>
-            </div>
-
-            <p className="text-xs font-bold text-[#737687] uppercase tracking-wider mb-3">
-              Select a workflow agent
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              {workflowAgents.map((agent) => {
-                const Icon = workflowIconMap[agent.icon]
-                const isSelected = selectedWorkflowAgent?.id === agent.id
-                return (
-                  <button
-                    key={agent.id}
-                    onClick={() => setSelectedWorkflowAgent(agent)}
-                    className={`p-3 rounded-xl border text-left transition-all ${
-                      isSelected
-                        ? "border-[#004bca] bg-[#004bca]/5 shadow-sm"
-                        : "border-[#e0e3e5] hover:border-[#004bca]/50 hover:bg-[#f7f9fb]"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div
-                        className="w-9 h-9 rounded-lg flex items-center justify-center"
-                        style={{ backgroundColor: `${agent.color}15` }}
-                      >
-                        <Icon className="w-4 h-4" style={{ color: agent.color }} />
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-[#191c1e] block">
-                          {agent.name}
-                        </span>
-                        <span className="text-[10px] text-[#737687]">
-                          {agent.prospectsCount} prospects
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-4 border-t border-[#e0e3e5]">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowWorkflowDialog(false)
-                setSelectedWorkflowAgent(null)
+      {jobs.length > 0 && (
+        <footer className="bg-white px-6 py-3 border-t border-[#e0e3e5]/20 flex justify-between items-center z-30 shrink-0">
+          <div className="flex items-center gap-4 text-[11px] font-medium text-[#737687]">
+            <span>Rows:</span>
+            <Select
+              value={rowsPerPage.toString()}
+              onValueChange={(v) => {
+                setRowsPerPage(Number(v))
+                setJobPage(1)
               }}
             >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleConfirmWorkflowAssignment}
-              disabled={!selectedWorkflowAgent}
-              className="bg-[#004bca] hover:bg-[#003ea8] text-white gap-2"
-            >
-              <Wand2 className="w-4 h-4" />
-              Assign to {selectedWorkflowAgent?.name || "Workflow"}
-            </Button>
+              <SelectTrigger className="w-14 h-6 text-[11px] bg-transparent border-none p-0 font-bold text-[#191c1e]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="ml-2 border-l border-[#c2c6d9]/30 pl-4">
+              {startRow}-{endRow} of {totalJobs.toLocaleString()} results
+            </span>
           </div>
-        </DialogContent>
-      </Dialog>
+          <div className="flex gap-1">
+            <button
+              className="p-1 rounded-lg hover:bg-[#e0e3e5] text-[#737687] disabled:opacity-30"
+              disabled={jobPage === 1}
+              onClick={() => setJobPage((p) => Math.max(1, p - 1))}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const page = i + 1
+              return (
+                <button
+                  key={page}
+                  onClick={() => setJobPage(page)}
+                  className={`w-6 h-6 rounded-md text-[10px] font-bold transition-all ${
+                    jobPage === page
+                      ? "bg-[#004bca] text-white shadow-sm"
+                      : "hover:bg-[#e0e3e5] text-[#737687]"
+                  }`}
+                >
+                  {page}
+                </button>
+              )
+            })}
+            <button
+              className="p-1 rounded-lg hover:bg-[#e0e3e5] text-[#737687] disabled:opacity-30"
+              disabled={jobPage >= totalPages}
+              onClick={() => setJobPage((p) => p + 1)}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </footer>
+      )}
+
+      <JobProspectsPanel
+        isOpen={prospectsPanelOpen}
+        onClose={() => {
+          setProspectsPanelOpen(false)
+          setSelectedJobForProspects(null)
+        }}
+        jobId={selectedJobForProspects?.id || null}
+        jobTitle={selectedJobForProspects?.title || ""}
+        companyName={selectedJobForProspects?.company || ""}
+        runId={runId}
+      />
+
+      <OutreachStatusPanel
+        isOpen={outreachStatusOpen}
+        runId={runId}
+        onClose={() => setOutreachStatusOpen(false)}
+      />
     </div>
   )
 }

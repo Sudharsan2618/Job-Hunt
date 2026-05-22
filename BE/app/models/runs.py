@@ -27,6 +27,8 @@ class RunConfigModel(BaseModel):
     """Snapshot of the ICP config used for this run"""
     searchTitles: List[str]
     searchLocations: List[str]
+    targetIndustries: List[str] = Field(default_factory=list)
+    customIndustries: List[str] = Field(default_factory=list)
     hoursOld: int
     resultsPerSearch: int
     siteName: List[str]

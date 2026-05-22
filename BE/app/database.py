@@ -43,6 +43,47 @@ async def connect_to_mongo():
     except Exception as e:
         print(f"[ERROR] MongoDB connection failed: {e}")
         raise
+
+    # Relax prospects schema validator — pre-enrichment prospects may have empty
+    # lastName / email which the original strict $jsonSchema rejects.
+    try:
+        await database.command({
+            "collMod": "prospects",
+            "validator": {
+                "$jsonSchema": {
+                    "bsonType": "object",
+                    "required": ["_id", "firstName"],
+                    "properties": {
+                        "_id": {"bsonType": "objectId"},
+                        "firstName": {"bsonType": "string"},
+                        "lastName": {"bsonType": "string"},
+                        "email": {"bsonType": ["string", "null"]},
+                    },
+                }
+            },
+            "validationLevel": "moderate",
+        })
+        print("[OK] Relaxed prospects schema validator")
+    except Exception as e:
+        # Collection may not exist yet — that's fine, we'll insert with default schema
+        print(f"[WARN] Could not relax prospects validator (likely first run): {e}")
+
+    # Rebuild prospects email index as a unique partial index — multiple
+    # pre-enrichment prospects share email="" so a plain unique index breaks.
+    try:
+        prospects = database["prospects"]
+        existing = await prospects.index_information()
+        if "idx_email" in existing:
+            await prospects.drop_index("idx_email")
+        await prospects.create_index(
+            "email",
+            name="idx_email",
+            unique=True,
+            partialFilterExpression={"email": {"$type": "string", "$gt": ""}},
+        )
+        print("[OK] Rebuilt prospects email index as unique partial")
+    except Exception as e:
+        print(f"[WARN] Could not rebuild prospects email index: {e}")
  
  
 async def close_mongo_connection():

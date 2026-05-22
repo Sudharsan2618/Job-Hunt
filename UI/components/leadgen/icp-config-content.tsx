@@ -82,6 +82,14 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
   const [customTitle, setCustomTitle] = useState("")
   const [titleSearch, setTitleSearch] = useState("")
   const [showSelectedOnly, setShowSelectedOnly] = useState(false)
+  // Inline-add for industries / locations
+  const [newIndustryName, setNewIndustryName] = useState("")
+  const [newIndustryDesc, setNewIndustryDesc] = useState("")
+  const [addingIndustry, setAddingIndustry] = useState(false)
+  const [newLocationName, setNewLocationName] = useState("")
+  const [newLocationCountry, setNewLocationCountry] = useState("")
+  const [addingLocation, setAddingLocation] = useState(false)
+  const [addingTitle, setAddingTitle] = useState(false)
 
   // Naukri Settings
   const [minExperience, setMinExperience] = useState<number | undefined>(undefined)
@@ -165,6 +173,117 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
     return matchesSearch && matchesSelection
   })
 
+  // ── Inline-add API helpers ─────────────────────────────────────────────
+
+  const refetchICP = async () => {
+    const response = await fetch(`${API_BASE_URL}/api/v1/icp/config`)
+    if (!response.ok) return
+    const data: ICPConfig = await response.json()
+    setIcpConfig(data)
+    // Re-map preserving previous selections
+    setIndustries((prev) => {
+      const prevSel: Record<string, boolean> = Object.fromEntries(prev.map(p => [p.id, p.selected]))
+      return data.industries.map((ind) => ({
+        id: ind.slug,
+        name: ind.displayName,
+        selected: prevSel[ind.slug] ?? ind.isTarget,
+      }))
+    })
+    setTitles((prev) => {
+      const prevSel: Record<string, boolean> = Object.fromEntries(prev.map(p => [p.name.toLowerCase(), p.selected]))
+      return data.titles.map((t, idx) => ({
+        id: idx.toString(),
+        name: t.title,
+        selected: prevSel[t.title.toLowerCase()] ?? t.isDefault,
+      }))
+    })
+    setCityList((prev) => {
+      const prevSel: Record<string, boolean> = Object.fromEntries(prev.map(p => [p.name.toLowerCase(), p.selected]))
+      return data.locations.map((loc, idx) => ({
+        id: idx.toString(),
+        name: loc.location,
+        selected: prevSel[loc.location.toLowerCase()] ?? loc.isDefault,
+      }))
+    })
+  }
+
+  const handleAddIndustry = async () => {
+    const name = newIndustryName.trim()
+    if (!name) return
+    setAddingIndustry(true)
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/v1/icp/industries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: name, description: newIndustryDesc.trim() || undefined }),
+      })
+      if (!resp.ok) {
+        alert("Failed to add industry: " + (await resp.text()))
+        return
+      }
+      await refetchICP()
+      // pre-select the newly added one
+      setIndustries((prev) =>
+        prev.map((ind) => (ind.name.toLowerCase() === name.toLowerCase() ? { ...ind, selected: true } : ind))
+      )
+      setNewIndustryName("")
+      setNewIndustryDesc("")
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setAddingIndustry(false)
+    }
+  }
+
+  const handleAddTitle = async () => {
+    const t = customTitle.trim()
+    if (!t) return
+    setAddingTitle(true)
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/v1/icp/titles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: t }),
+      })
+      if (!resp.ok) {
+        alert("Failed to add title: " + (await resp.text()))
+        return
+      }
+      await refetchICP()
+      setTitles((prev) =>
+        prev.map((x) => (x.name.toLowerCase() === t.toLowerCase() ? { ...x, selected: true } : x))
+      )
+      setCustomTitle("")
+    } finally {
+      setAddingTitle(false)
+    }
+  }
+
+  const handleAddLocation = async () => {
+    const loc = newLocationName.trim()
+    if (!loc) return
+    setAddingLocation(true)
+    try {
+      const resp = await fetch(`${API_BASE_URL}/api/v1/icp/locations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ location: loc, country: newLocationCountry.trim() || undefined }),
+      })
+      if (!resp.ok) {
+        alert("Failed to add location: " + (await resp.text()))
+        return
+      }
+      await refetchICP()
+      setCityList((prev) =>
+        prev.map((x) => (x.name.toLowerCase() === loc.toLowerCase() ? { ...x, selected: true } : x))
+      )
+      setNewLocationName("")
+      setNewLocationCountry("")
+    } finally {
+      setAddingLocation(false)
+    }
+  }
+
   const toggleSource = (source: string) => {
     setActiveSources((prev) =>
       prev.includes(source) ? prev.filter((s) => s !== source) : [...prev, source]
@@ -177,6 +296,12 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
       const selectedTitles = titles.filter(t => t.selected).map(t => t.name)
       const selectedLocations = cityList.filter(c => c.selected).map(c => c.name)
 
+      const selectedIndustryNames = industries.filter(i => i.selected).map(i => i.name)
+      if (selectedIndustryNames.length === 0) {
+        alert("Please select at least one target industry")
+        setStartingRun(false)
+        return
+      }
       if (activeSources.length === 0) {
         alert("Please select at least one active source")
         setStartingRun(false)
@@ -196,6 +321,8 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
       const runConfigPayload: any = {
         searchTitles: selectedTitles,
         searchLocations: selectedLocations,
+        targetIndustries: selectedIndustryNames,
+        customIndustries: [],
         hoursOld: parseInt(maxPostingAge) || 24,
         resultsPerSearch: parseInt(resultsPerBatch) || 50,
         siteName: activeSources,
@@ -289,6 +416,30 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
                   </button>
                 ))}
               </div>
+              <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col md:flex-row gap-2">
+                <input
+                  type="text"
+                  value={newIndustryName}
+                  onChange={(e) => setNewIndustryName(e.target.value)}
+                  placeholder="Add industry name (e.g. AI Research Labs)..."
+                  className="flex-1 bg-slate-100 border-none rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={newIndustryDesc}
+                  onChange={(e) => setNewIndustryDesc(e.target.value)}
+                  placeholder="Optional description..."
+                  className="flex-1 bg-slate-100 border-none rounded-lg py-2 px-3 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                />
+                <button
+                  onClick={handleAddIndustry}
+                  disabled={addingIndustry || !newIndustryName.trim()}
+                  className="px-3 py-2 bg-slate-900 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-1"
+                >
+                  {addingIndustry ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Add
+                </button>
+              </div>
             </section>
 
             {/* Executive Search Titles */}
@@ -381,8 +532,12 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
                     placeholder="Add custom title..."
                     className="flex-1 bg-slate-100 border-none rounded-lg py-2 px-4 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
                   />
-                  <button className="p-2 bg-slate-900 text-white rounded-lg hover:opacity-90 transition-opacity">
-                    <Plus className="w-4 h-4" />
+                  <button
+                    onClick={handleAddTitle}
+                    disabled={addingTitle || !customTitle.trim()}
+                    className="p-2 bg-slate-900 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                  >
+                    {addingTitle ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
@@ -589,20 +744,45 @@ export function ICPConfigContent({ onStartGeneration }: ICPConfigContentProps) {
               </div>
               <div className="space-y-2">
                 {cityList.map(city => (
-                  <label 
+                  <label
                     key={city.id}
                     className="flex items-center justify-between p-2 rounded hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     <span className={`text-sm font-medium ${city.selected ? 'text-slate-900' : 'text-slate-400'}`}>
                       {city.name}
                     </span>
-                    <Checkbox 
+                    <Checkbox
                       checked={city.selected}
                       onCheckedChange={() => toggleCity(city.id)}
                       className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
                     />
                   </label>
                 ))}
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newLocationName}
+                    onChange={(e) => setNewLocationName(e.target.value)}
+                    placeholder="New location..."
+                    className="flex-1 bg-slate-100 border-none rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={newLocationCountry}
+                    onChange={(e) => setNewLocationCountry(e.target.value)}
+                    placeholder="Country"
+                    className="w-24 bg-slate-100 border-none rounded-lg py-2 px-3 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                  />
+                  <button
+                    onClick={handleAddLocation}
+                    disabled={addingLocation || !newLocationName.trim()}
+                    className="p-2 bg-slate-900 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                  >
+                    {addingLocation ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
             </section>
 
